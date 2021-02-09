@@ -1,0 +1,177 @@
+(include-book "books/acl2s/cgen/top")
+
+(ubt! 'fns-w-arities)
+(acl2s-defaults :set verbosity-level 4)
+
+(defun rev2 (x)
+  (declare (xargs :guard (listp x) :VERIFY-GUARDS NIL))
+  (if (consp x)
+      (append (rev2 (cdr x)) (car x))
+      nil))
+
+; (test? (equal (rev (rev x)) x))
+
+(defun getvars (form state)
+  (declare (xargs :mode :program
+                  :stobjs (state)))
+  (declare (ignorable state))
+  (cw  "~|vars: ~x0~|" (all-vars form))
+  )
+
+(defmacro getvarsM (form &rest kwd-val-lst)
+  (let* ((vl-entry (assoc-keyword :verbosity-level kwd-val-lst))
+         (vl (and vl-entry (cadr vl-entry)))
+         (debug (and (natp vl) (cgen::debug-flag vl))))
+        `(with-output
+          :stack :push
+          ,(if debug :on :off) :all
+          :gag-mode ,(not debug)
+          (make-event
+           (getvars ',form state)))))
+
+(defun getfuncs (form state)
+  (declare (xargs :mode :program
+                  :stobjs (state)))
+  (declare (ignorable state))
+  (cw  "~|vars: ~x0~|" (all-fnnames form)))
+
+(defmacro getfuncsM (form)
+  `(with-output
+    :stack :push
+    ,:on :all
+    :gag-mode ,(not t)
+    (make-event
+     (getfuncs ',form state))))
+
+(defun fns-w-arities (fns state)
+  (declare (xargs :mode :program :stobjs (state)))
+  (if (endp fns)
+      nil
+      (acons (car fns) (arity (car fns) (w state)) (fns-w-arities (cdr fns) state))))
+
+;; Returns a list of numbers [1..=n]
+(defun list-of-n (n)
+  (declare (xargs :mode :program ))
+  (if (= n 1) (list 1) (cons n (list-of-n (- n 1)))))
+
+(defun reflow-head-with-rests (head rests)
+  (declare (xargs :mode :program))
+  (if (endp rests)
+      nil
+      (cons (append (list head) (car rests)) (reflow-head-with-rests head (cdr rests))))
+  )
+
+(defun reflow-heads-with-rests (heads rests)
+  (declare (xargs :mode :program))
+  (if (endp heads)
+      nil
+      (append (reflow-head-with-rests (car heads) rests) (reflow-heads-with-rests (cdr heads) rests)))
+  )
+
+(mutual-recursion
+ ;; Creates a term sequence, given the possible sizes for the head term.
+ ;; Specifically, map over the head sizes, for each size creating a head term of
+ ;; that size and terms in the rest of the sequence of the remaining sequence
+ ;; size.
+ (defun make-term--seq-map-over-head (allf heads num-terms size)
+   (declare (xargs :mode :program ))
+   (if (endp heads)
+       nil
+       (let* ((head-terms (make-term allf (car heads)))
+              (tail-terms (make-term--seq-permute-over-size allf
+                                                            (1- num-terms)
+                                                            (- size (car heads)))))
+             (cond
+              ((= num-terms 1) head-terms)
+              ; ((xor (endp head-terms) (endp tail-terms)) nil)
+              (t (let* ((insts-for-headsize (reflow-heads-with-rests head-terms tail-terms)))
+                       (prog2$ (cw  "~%heads: ~x0    tails: ~x1     instances: ~x2~|" head-terms tail-terms insts-for-headsize)
+                               (append insts-for-headsize (make-term--seq-map-over-head allf (cdr heads) num-terms size)))
+                       ))))))
+ 
+ ;; Creates a list of sequences of terms, list(S), where the number of terms in
+ ;; S is equal to "num-terms" and the sum of their sizes is equal to "size".
+ ;; This is just a permutation over the ways to arrange "num-terms" terms in a
+ ;; sequence s.t. their sizes respect the invariant sum "size".
+ (defun make-term--seq-permute-over-size (allf num-terms size)
+   (declare (xargs :mode :program ))
+   (if (= num-terms 1)
+       (list ( make-term allf size )) ; TODO: done to make reflow-heads-with-rests happy. Note sure this is needed.
+       (let* ((num-tail-terms (1- num-terms))
+              (max-head-size (- size num-tail-terms))
+              (head-sizes (list-of-n max-head-size)))
+             (make-term--seq-map-over-head allf head-sizes num-terms size))
+       )
+   )
+ 
+ ;; Creates a list of terms of a given size walking over all possible functions
+ ;; available for the term generation.
+ (defun make-term--walkfns (allf fns size)
+   (declare (xargs :mode :program))
+   (if (endp fns)
+       nil
+       (let* ((fn (car fns))
+              (arity (cdr (assoc fn allf))))
+             (if (< arity size)
+                 ; When (function name + arity) is less than or equal to the target
+                 ; term size, we can fit that function in as an instance of the sized
+                 ; term.
+                 (let* ((seqs (make-term--seq-permute-over-size allf arity (1- size)))
+                        (instances (reflow-head-with-rests fn seqs)))
+                       (append instances (make-term--walkfns allf (cdr fns) size)))
+                 ; Otherwise, the arity > target size and there is no way we can fit a
+                 ; call instance in the term.
+                 (make-term--walkfns allf (cdr fns) size)))))
+ 
+ ;; Creates a list of terms of a given "size".
+ ;; "size" is measured by the number of items (functions/variables/constants)
+ ;; present in the term.
+ (defun make-term (fns-w-arities size)
+   (declare (xargs :mode :program))
+   (if (= size 1)
+       (list 'X)
+       (make-term--walkfns fns-w-arities (strip-cars fns-w-arities) size)))
+ )
+
+ (defmacro fns-w-aritiesM (fns)
+   `(fns-w-arities ,fns state))
+
+ (defmacro make-termM (fns size)
+   `(make-term (fns-w-aritiesM ,fns) ,size))
+
+(defun runit (terms state)
+   (declare (xargs :stobjs (state)))
+   (if (endp terms) (mv nil nil state)
+     (b* ((term (car terms))
+          ((mv ? succ state) (acl2s::test?-fn term nil nil state))
+          ((mv ok bad state) (runit (cdr terms) state))
+          (ok1 (if succ (cons term ok) ok))
+          (bad1 (if succ bad (cons term bad))))
+         (mv ok1 bad1 state))))
+
+(defmacro genM (fns size)
+  `(b* ((terms (make-term (fns-w-arities ,fns state) ,size))
+        ((mv ok bad state) (runit terms state)))
+       (prog2$
+         (cw "~%Tried ~x0 terms.~%ok:~y1~%~%bad:~y2~|" (len terms) ok bad)
+         (mv ok bad state))))
+
+ (make-termM '(equal rev2) 5)
+ (genM '(equal rev2) 5)
+
+ ;; (defmacro make-termM (fns size)
+ ;;   `(with-output
+ ;;     :stack :push
+ ;;     ,:on :all
+ ;;     :gag-mode ,(not t)
+ ;;     (make-event
+ ;;      (make-term (fns-w-arities fns state) size))))
+ 
+ ; NOTES
+ ; - we can grab type prescription of a known term with type-set, f.x.
+ ;     (type-set '(integerp x) nil nil nil (ens state) (w state) nil nil nil)
+ ;   gives
+ ;     (135 ((LEMMA (:TYPE-PRESCRIPTION ARITY))))
+ ; - can grab function guards with (guard ...)
+ ; - can grab function arity with (arity ...)
+ ; - need to find a way to "instantiate" a subtype (look at cgen for this)

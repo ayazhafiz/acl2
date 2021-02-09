@@ -121,31 +121,31 @@
                      (t (cgen::print-testing-summary cgen::cgen-state ctx state))))
 
 
-       ((mv cts-found? state)
+       ((mv cts-found? succ state)
         (cond ((eq res :falsifiable) (prog2$
                                       (cgen::cw? (cgen::normal-output-flag vl)
                                            "~%Test? found a counterexample.~%")
-                                      (mv T state)))
+                                      (mv T nil state)))
               ((eq res t) (prog2$
                            (cgen::cw? (and pts? (cgen::normal-output-flag vl))
                                 "~|Test? failed (probably due to a hard error).~%")
-                           (mv nil state)))
+                           (mv nil nil state)))
 ;Success means the prover actually proved the conjecture under consideration
               ((eq res nil) (prog2$
                              (cgen::cw? (and pts? (cgen::normal-output-flag vl))
                                   "~%Test? proved the conjecture under consideration~s0. ~
  Therefore, no counterexamples exist. ~%" (if hints "" " (without induction)"))
-                             (mv NIL state)))
+                             (mv NIL t state)))
 ; either prove failed, or we didnt call prove. Either way if we didnt find a cts
 ; then we say the test? succeeded! But dont print if print-cgen-summary is nil.
               (t (prog2$
                   (cgen::cw? (and pts? (cgen::normal-output-flag vl))
                        "~%Test? succeeded. No counterexamples were found.~%")
-                  (mv NIL state)))))
+                  (mv NIL t state)))))
 
        )
 
-    (mv cts-found? '(value-triple :invisible) state )))
+    (mv cts-found? succ state )))
 
 (defmacro test? (form &rest kwd-val-lst)
   (let* ((vl-entry (assoc-keyword :verbosity-level kwd-val-lst))
