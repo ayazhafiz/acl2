@@ -1,0 +1,133 @@
+Cgen/Debug: (pm? NIL) (TEST? EQUAL X (EQUAL X X))
+Cgen/Verbose: (at top-level) dumb type-alist is ((X ACL2S::ALL))
+
+
+Cgen/Stats/simple-search:: *START*
+Cgen/Note: Enumerating "top" with
+((X . ACL2S::ALL))
+
+TTAG NOTE: Adding ttag :CGEN-TESTING-DRIVER-LOOP from the top level loop.
+Cgen/Stats/simple-search: 685/1 cts/wts found in this run (1000 tests)!
+Cgen/Stats/simple-search: *END* Stopping condition: NIL
+
+Cgen/Debug: no-prove-call-p: T override-hints:
+((EVAL-AND-TRANSLATE-HINT-EXPRESSION
+  OVERRIDE-HINTS T
+  (CONS
+     'NIL
+     (CONS (DEFDATA::RECORD-DEST-ELIM-SUPPORT-FN STABLE-UNDER-SIMPLIFICATIONP
+                                                 CLAUSE KEYWORD-ALIST WORLD)
+           (CONS STATE 'NIL)))))
+
+testing summary - gcs% = (CGEN::GCS% (1000 314 . 0) (685 . 1))
+testing summary - s-hist =
+(("top"
+      CGEN::S-HIST-ENTRY%
+      (CGEN::TEST-OUTCOMES% (685 (((X #\B)) ((X 0)) ((X NIL)))
+                                 (NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL
+                                      NIL NIL NIL NIL NIL NIL NIL NIL NIL))
+                            (1 (((X T))) (NIL))
+                            (0 NIL NIL)
+                            314 ((X . ACL2S::ALL))
+                            NIL)
+      (NIL (X) EQUAL X (EQUAL X X))
+      (NIL)
+      (30370993/1000000 . 15227663/500000)
+      . "top"))
+
+
+**Summary of Cgen/testing**
+(EQUAL X (EQUAL X X))
+We tested 1000 examples across 1 subgoals, of which 686 (686 unique)
+satisfied the hypotheses, and found 685 counterexamples and 1 witnesses.
+The total time taken (incl. prover time) is 0.09 seconds
+The time taken by testing is 0.08 seconds
+
+We falsified the conjecture. Here are counterexamples:
+ [found in : "top"]
+ -- ((X #\B))
+ -- ((X 0))
+ -- ((X NIL))
+
+Cases in which the conjecture is true include:
+ [found in : "top"]
+ -- ((X T))
+
+__Vacuous_test_statistics_BEGIN__
+CTX;(:USER-DEFINED . TEST?)
+__SUBGOAL_BEGIN__
+SUBGOAL_NAME;"top";SAT%;100.00
+(EQUAL X (EQUAL X X))
+Enum:
+((X . ACL2S::ALL))
+__SUBGOAL_END__
+__Vacuous_test_statistics_END__
+
+Test? found a counterexample.
