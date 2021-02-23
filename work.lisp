@@ -1,5 +1,6 @@
 (include-book "books/acl2s/cgen/top")
 (include-book "books/kestrel/std/system/add-suffix-to-fn-or-const")
+(include-book "books/std/util/defprojection")
 (include-book "books/std/util/defmapappend")
 
 (ubt! 'fndata-p)
@@ -240,63 +241,137 @@
        (mv terms st)))
  )
 
+;; Collects the variables present in a term.
+(define collect-vars ((st st-p) (term pseudo-termp))
+  :mode :program
+  (cond ((listp term)
+         (if (endp term)
+             nil
+             (if (st-fn-exists st (car term))
+                 (collect-vars st (cdr term))
+                 (cons (car term) (collect-vars st (cdr term))))))
+        (t (if (st-fn-exists st term)
+               nil
+               term)))
+  )
+
 (def-const *empty-vars-store*
-  (acons 'vars nil (acons 'sym 65 nil)))
+  (acons 'frozen nil
+         (acons 'vars nil
+                (acons 'sym 65 nil))))
+
+(define frozen-vars-store ((vars listp))
+  (put-assoc 'frozen t
+             (put-assoc 'vars vars *empty-vars-store*)))
 
 ;; Given a term with holes, places variables in those holes.
 ;; At each hole, the choices are either (1) any previously instantiated
 ;; variable, or (2) a fresh variable.
-(define reify-vars ((st st-p) (term pseudo-termp) (vs alistp))
-  (declare (ignorable st))
-  (declare (ignorable vs))
+(define reify-term ((st st-p) (term pseudo-termp) (vs alistp))
   :mode :program :verify-guards nil
   (cond ((and (listp term) (endp term)) (mv (list nil) vs))
         ((st-fn-exists st term) (mv (list term) vs))
         ((and (listp term)
               (not (eq (car term) *GEN-HOLE*)))
-         (b* (((mv heads vs) (reify-vars st (car term) vs))
-              ((mv tails vs) (reify-vars st (cdr term) vs)))
+         (b* (((mv heads vs) (reify-term st (car term) vs))
+              ((mv tails vs) (reify-term st (cdr term) vs)))
              (mv (reflow-heads-with-rests st heads tails) vs)))
         (t ; (and (listp term) (eq (car term) *GEN-HOLE*))
-           (b* ((avoid (append vs (st-all-fns st)))
-                (symno (aget 'sym vs))
-                (basis (intern (string (code-char symno)) "ACL2"))
-                (fresh (fresh-name basis avoid))
-                (allvars (cons fresh (aget 'vars vs)))
-                (vs (put-assoc 'vars allvars vs))
-                (vs (put-assoc 'sym (1+ symno) vs))
-                ; Now get the rest of the term too
-                ((mv tails vs) (reify-vars st (cdr term) vs)))
+           (b* ((vs (if (aget 'frozen vs)
+                        ; frozen => use present vars
+                        vs
+                        ; not frozen => add a fresh variable, then any present variable is a choice
+                        (b* ((avoid (append (aget 'vars vs) (st-all-fns st)))
+                             (symno (aget 'sym vs))
+                             (basis (intern (string (code-char symno)) "ACL2"))
+                             (fresh (fresh-name basis avoid))
+                             (allvars (cons fresh (aget 'vars vs)))
+                             (vs (put-assoc 'vars allvars vs))
+                             (vs (put-assoc 'sym (1+ symno) vs)))
+                            vs)))
+                (possible-vars (aget 'vars vs))
+                ((mv tails vs) (reify-term st (cdr term) vs)))
                (mv
-                (reflow-heads-with-rests st allvars tails)
+                (reflow-heads-with-rests st possible-vars tails)
                 vs)))
         )
   )
 
-(define reify-vars-top ((st st-p) (term pseudo-termp))
+(define reify-term-top ((st st-p) (term pseudo-termp))
   :mode :program :verify-guards nil
-  (b* (((mv terms ?) (reify-vars st term *empty-vars-store*)))
+  (b* (((mv terms ?) (reify-term st term *empty-vars-store*)))
       terms))
 
-(std::defmapappend reify-vars-l (st x)
+(std::defmapappend reify-term-list (st x)
                    :mode :program
                    :guard (and (st-p st) (pseudo-termp x))
-                   (reify-vars-top st x))
+                   (reify-term-top st x))
+
+;;;;; reify-holed-rterms
+;; Given a single concrete lterm and a list of holed rterms,
+;;   1. collect the variables in the lterm (TODO collect these on-the-fly
+;;      during reify-term)
+;;   2. reify each rterm with variables in the lterm
+;;   3. return a concrete pair of (lterm, rterm) ready to be used for a theorem.
+
+(std::defprojection pair-each (left x)
+                    :mode :program
+                    (cons left x))
+
+(define reify-holed-rterms--inner ((st st-p) (vs listp) (lterm pseudo-termp) (rterms listp))
+  :mode :program
+  (if (endp rterms)
+      nil
+      (b* (((mv reified-rterms ?) (reify-term st (car rterms) vs))
+           (lrterms (pair-each lterm reified-rterms)))
+          (append lrterms (reify-holed-rterms--inner st vs lterm (cdr rterms))))))
+
+(define reify-holed-rterms ((st st-p) (lterm pseudo-termp) (rterms listp))
+  :mode :program
+  (b* ((lvars (collect-vars st lterm))
+       (vs (frozen-vars-store lvars)))
+      (reify-holed-rterms--inner st vs lterm rterms)))
+
+(std::defmapappend pair-lterms-holed-rterms (st x holed-rterms)
+                   :mode :program
+                   :guard (and (st-p st) (pseudo-termp x) (listp holed-rterms))
+                   (reify-holed-rterms st x holed-rterms))
+
+;;;;; reify-holed-rterms
+
+;; Folds a pair (left, right) into a proper theorem
+;; (IMPLIES ,hyps (EQUAL ,left ,right))
+(define make-term--fold-into-thm ((lrpair consp))
+  :mode :program
+  `(IMPLIES
+     (AND t)
+     (EQUAL ,(car lrpair) ,(cdr lrpair))))
+
+(std::defprojection make-term--fold-into-thm-list (x)
+                    :mode :program
+                    (make-term--fold-into-thm x))
 
 (defun make-term-top (fn-data size)
   (declare (xargs :mode :program))
-  (b* ((left (ceiling size 2))
+  (b* (
+       ; (1) break up sizes - left >= right
+       (left (ceiling size 2))
        (right (- size left))
        (st (st-new fn-data left))
-       ((mv lterms st) (make-term st left))
-       (lterms (reify-vars-l st lterms))
-       ((mv rterms st) (if (= left right)
-                           (mv lterms st)
-                           ; TODO only use terms that are present in the LHS
-                           (b* (((mv rterms st) (make-term st right)))
-                               (mv (reify-vars-l st rterms) st))))
-       (rewrites (reflow-heads-with-rests st lterms rterms)))
-      (reflow-head-with-rests st 'EQUAL rewrites)))
+       ; (2) create holed terms
+       ((mv lterms-holed st) (make-term st left))
+       ((mv rterms-holed st) (if (= left right)
+                                 (mv lterms-holed st)
+                                 (make-term st right)))
+       ; (3) instantiate lterms with concrete vars
+       (lterms (reify-term-list st lterms-holed))
+       ; (4) for each lterm, instantiate one of each rterm with concrete
+       ; variables from the set of variables in the lterm. Now we have pairs
+       ; of concrete terms (left, right) to be used in a theorem.
+       (lr-term-pairs (pair-lterms-holed-rterms st lterms rterms-holed))
+       ; (5) collapse terms into a theorem
+       (eq-terms (make-term--fold-into-thm-list lr-term-pairs)))
+      eq-terms))
 
 (defmacro fn-dataM (fns)
   `(fn-datas ,fns state))
