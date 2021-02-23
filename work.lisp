@@ -69,6 +69,9 @@
   (declare (xargs :mode :program))
   (if (= n 1) (list 1) (cons n (list-of-n (- n 1)))))
 
+
+;;;;; GEN STATE
+
 (defun st-new (fn-data nmax-vars)
   (declare (xargs :guard (fndata-p fn-data) :verify-guards nil))
   (b* ((fns (acons 'fns fn-data nil))
@@ -162,6 +165,8 @@
 ;       nil
 ;       (cons (fresh-name (car basis) avoid) (n-fresh-names (1- howmany) avoid (cdr basis)))))
 
+;;;;; HOLED TERM GENERATION
+
 (mutual-recursion
  ;; Creates a term sequence, given the possible sizes for the head term.
  ;; Specifically, map over the head sizes, for each size creating a head term of
@@ -241,6 +246,8 @@
        (mv terms st)))
  )
 
+;;;;; VARIABLE COLLECTION
+
 ;; Collects the variables present in a term.
 (define collect-vars ((st st-p) (term pseudo-termp))
   :mode :program
@@ -263,6 +270,8 @@
 (define frozen-vars-store ((vars listp))
   (put-assoc 'frozen t
              (put-assoc 'vars vars *empty-vars-store*)))
+
+;;;;; TERM REIFICATION
 
 ;; Given a term with holes, places variables in those holes.
 ;; At each hole, the choices are either (1) any previously instantiated
@@ -307,7 +316,7 @@
                    :guard (and (st-p st) (pseudo-termp x))
                    (reify-term-top st x))
 
-;;;;; reify-holed-rterms
+;;;;; RTERM REIFICATION
 ;; Given a single concrete lterm and a list of holed rterms,
 ;;   1. collect the variables in the lterm (TODO collect these on-the-fly
 ;;      during reify-term)
@@ -337,7 +346,7 @@
                    :guard (and (st-p st) (pseudo-termp x) (listp holed-rterms))
                    (reify-holed-rterms st x holed-rterms))
 
-;;;;; reify-holed-rterms
+;;;;; HYPOTHESIS COLLECTION
 
 ;; Folds a pair (left, right) into a proper theorem
 ;; (IMPLIES ,hyps (EQUAL ,left ,right))
