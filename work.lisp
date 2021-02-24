@@ -202,7 +202,7 @@
    (declare (xargs :mode :program ))
    (cond
     ((zerop num-terms) (mv nil st))
-    (t (b* ((num-tail-terms (1- num-terms))
+    (t (b* ((num-tail-terms (- num-terms 1))
             (max-head-size (- size num-tail-terms))
             (head-sizes (list-of-n max-head-size)))
            (make-term--seq-map-over-head st head-sizes num-terms size)))
@@ -221,7 +221,7 @@
                  ; When (function name + arity) is less than or equal to the target
                  ; term size, we can fit that function in as an instance of the sized
                  ; term.
-                 (b* (((mv seqs st) (make-term--seq-permute-over-size st arity (1- size)))
+                 (b* (((mv seqs st) (make-term--seq-permute-over-size st arity (- size 1)))
                       (instances (reflow-head-with-rests st fn seqs))
                       ((mv allrest st) (make-term--walkfns st (cdr fns) size)))
                      (mv (append instances allrest) st))
@@ -329,9 +329,13 @@
 ;;   2. reify each rterm with variables in the lterm
 ;;   3. return a concrete pair of (lterm, rterm) ready to be used for a theorem.
 
-(std::defprojection pair-each (left x)
-                    :mode :program
-                    (cons left x))
+;; Given an lterm and a set of corresponding rterms, produces a list of lrpairs
+;; (l, r)\forall r\in rterms\setminus\{l\}
+(define pair-each ((lterm pseudo-termp) (rterms pseudo-term-listp))
+  :mode :program
+  (cond ((endp rterms) nil)
+        ;((equal lterm (caar rterms)) (pair-each lterm (cdr rterms)))
+        (t (cons (cons lterm (car rterms)) (pair-each lterm (cdr rterms))))))
 
 (define reify-holed-rterms--inner ((st st-p) (vs listp) (lterm pseudo-termp) (rterms listp))
   :mode :program
@@ -381,19 +385,20 @@
 (define make-substs ((vars pseudo-term-listp) (vals pseudo-term-listp))
   :mode :program
   (cond
-    ((and (endp vars) (endp vals)) nil)
-    ((or (endp vars) (endp vals))
-     (er hard 'top-level "vars and vals of different lengths: ~x0 and ~x1~%" vars vals))
-    (t (acons (car vars) (car vals) (make-substs (cdr vars) (cdr vals))))))
+   ((and (endp vars) (endp vals)) nil)
+   ((or (endp vars) (endp vals))
+    (er hard 'top-level "vars and vals of different lengths: ~x0 and ~x1~%" vars vals))
+   (t (acons (car vars) (car vals) (make-substs (cdr vars) (cdr vals))))))
 
 (define apply-substs ((term pseudo-termp) (substs alistp))
   :mode :program
   (cond
-    ((and (listp term) (endp term)) nil)
-    ((listp term)
-     (b* ((subst-term (or (aget (car term) substs) (car term))))
-         (cons subst-term (apply-substs (cdr term) substs))))
-    (t (or (aget term substs) term))))
+   ((and (listp term) (endp term)) nil)
+   ((listp term)
+    (b* ((subst-term (or (aget (car term) substs)
+                         (apply-substs (car term) substs))))
+        (cons subst-term (apply-substs (cdr term) substs))))
+   (t (or (aget term substs) term))))
 
 ;; Given a pseudo-term for a function call, of form
 ;;   (FN p1 p2 ...pn)
@@ -428,28 +433,27 @@
   :mode :program
   ; :returns (listp hyps)
   (if (or (not (listp term)) (endp term))
-    ; Can't make any hypotheses from atoms.
-    nil
-    (b* (
-         ; This may be a function call, if we are at the start of the list. Check if
-         ; the first term is a function, and if so, extract the hypothesis.
-         (frontload-hyps (if (st-fn-exists st (car term))
-                              (list (extract-hyp-from-fn-call st term))
-                              nil))
-         ; The first term might itself be a nested function call, so get
-         ; hypotheses from those too.
-         (front-inner-hyps (extract-hyps-from-term st (car term)))
-         (rest-hyps (extract-hyps-from-term st (cdr term))))
-        (append (append front-inner-hyps rest-hyps) frontload-hyps))))
+      ; Can't make any hypotheses from atoms.
+      nil
+      (b* (
+           ; This may be a function call, if we are at the start of the list. Check if
+           ; the first term is a function, and if so, extract the hypothesis.
+           (frontload-hyps (if (st-fn-exists st (car term))
+                               (list (extract-hyp-from-fn-call st term))
+                               nil))
+           ; The first term might itself be a nested function call, so get
+           ; hypotheses from those too.
+           (front-inner-hyps (extract-hyps-from-term st (car term)))
+           (rest-hyps (extract-hyps-from-term st (cdr term))))
+          (append (append front-inner-hyps rest-hyps) frontload-hyps))))
 
 ;; Given an lrpair '(l r) returns an lrconj '(l r hyps) with the hypotheses
 ;; absorbed from l and r in hyps.
 (define lrterm-hypothesize ((st st-p) (lrpair lrpairp))
   :mode :program
   ; :returns (lrconjp conj)
-  (prog2$ (cw "~% pair:~x0~%" lrpair)
-   (append lrpair (list (append (extract-hyps-from-term st (car lrpair))
-                                (extract-hyps-from-term st (cadr lrpair)))))))
+  (append lrpair (list (append (extract-hyps-from-term st (car lrpair))
+                               (extract-hyps-from-term st (cadr lrpair))))))
 
 (std::defprojection lrterm2conj-list ((st st-p) (x listp))
                     :mode :program
@@ -463,14 +467,26 @@
 ;; (IMPLIES ,hyps (EQUAL ,left ,right))
 (define lrconj2thm ((lrconj lrconjp))
   :mode :program
-  (prog2$ (cw "~% conj:~x0~%" lrconj)
-   `(IMPLIES
-     ,(cons 'AND (caddr lrconj))
-     (EQUAL ,(car lrconj) ,(cadr lrconj)))))
+  `(IMPLIES
+    ,(cons 'AND (caddr lrconj))
+    (EQUAL ,(car lrconj) ,(cadr lrconj))))
 
 (std::defprojection lrconj2thm-list (x)
                     :mode :program
                     (lrconj2thm x))
+
+
+;; Given a term, put it in a form a user would want to see, since
+;; originally we generated these somewhat haphazardly.
+(define prettify-term-list ((terms pseudo-term-listp) state)
+  :mode :program
+  :stobjs state
+  (if (endp terms)
+      (mv nil state)
+      (b* (((mv rst state) (prettify-term-list (cdr terms) state))
+           ((mv ? desugared state) (acl2::translate (car terms) t nil t "thm..." (w state) state))
+           (sugared (acl2::untranslate desugared t (w state))))
+          (mv (cons sugared rst) state))))
 
 ;}}}
 
@@ -507,22 +523,16 @@
 (defmacro make-termM (fns size)
   `(make-term-top (fn-dataM ,fns) ,size))
 
-; TODO
-; HARD ACL2 ERROR in RAW-EV-FNCALL:  We had thought that *1* functions
-; were always defined outside the first pass of initialization, but the
-; *1* function for AND, which should be ACL2_*1*_COMMON-LISP::AND, is
-; not.
-; Probably we are not sanitizing the term before passing it to the
-; waterfall.
 (defun proveit (term state)
   (declare (xargs :mode :program
                   :stobjs (state)))
-  (b* ((toprove (prog2$ (cw "~%Now attempting proof of ~x0~%" term) term))
+  ; TODO catch error
+  (b* (((mv ? toprove state) (acl2::translate term t nil t "thm..." (w state) state))
        ((mv erp trval state) (acl2::state-global-let*
-                              ((acl2::inhibit-output-lst
-                                (cond (t #!acl2(set-difference-eq *valid-output-names* '(error))))))
-                              (acl2::prove toprove (acl2::make-pspv (acl2::ens state) (w state) state) (acl2::default-hints (w state)) (acl2::ens state) (w state) "thm..." state)
-                              ))
+                              ((acl2::inhibit-output-lst *valid-output-names*)
+                               (acl2::print-clause-ids nil)
+                               )
+                              (acl2::prove toprove (acl2::make-pspv (acl2::ens state) (w state) state) (acl2::default-hints (w state)) (acl2::ens state) (w state) "thm..." state)))
        ((mv ? prove-okp state) (mv erp (if erp (cadr trval) t) state))
        )
       ; (prog2$ (cw "~%Attempted proof of ~x0: erp ~x1, trivial ~x2~|" toprove erp trval)
@@ -531,29 +541,42 @@
       )
   )
 
-(defun runit (terms state)
+(defun runit (terms state cnt total)
   (declare (xargs :mode :program
                   :stobjs (state)))
-  (if (endp terms) (mv nil nil nil state)
-      (b* ((term (car terms))
-           ((mv proved no-ce has-ce state) (runit (cdr terms) state))
-           ; ((mv ? no-ce-p state) (acl2s::test?-fn term nil nil state))
-           ((mv prove-okp state) (if t (proveit term state) (mv nil state)))
-           (proved1 (if prove-okp (cons term proved) proved))
-           (no-ce1 (if nil (cons term no-ce) no-ce))
-           (has-ce1 (if nil has-ce (cons term has-ce))))
-          (mv proved1 no-ce1 has-ce1 state))))
+  (prog2$
+   (if (= 0 (mod (- total cnt) 100))
+       (cw "~x0/~x1...~%" (- total cnt) total)
+       nil)
+   (if (endp terms) (mv nil nil nil state)
+       (b* ((term (car terms))
+            ((mv proved no-ce has-ce state) (runit (cdr terms) state (1+ cnt) total))
+            ; ((mv ? no-ce-p state) (acl2s::test?-fn term nil nil state))
+            ((mv prove-okp state) (if t (proveit term state) (mv nil state)))
+            (proved1 (if prove-okp (cons term proved) proved))
+            (no-ce1 (if nil (cons term no-ce) no-ce))
+            (has-ce1 (if nil has-ce (cons term has-ce))))
+           (mv proved1 no-ce1 has-ce1 state)))))
 
 (defmacro genM (fns size)
   `(b* ((terms (make-term-top (fn-datas ,fns state) ,size))
-        ((mv proved no-ce has-ce state) (runit terms state)))
+        ((mv proved ?no-ce ?has-ce state) (prog2$
+                                           (cw "~%Testing ~x0 conjectures...~%" (length terms))
+                                           (runit terms state)))
+        (num-proved (len proved))
+        ((mv proved-pretty state) (prettify-term-list proved state)))
     (prog2$
-     (cw "~%Given the theory of ~x0, generated ~x1 terms of size ~x5.~%~%Counterexample checking segmented them:~%plausible:~y2~%~%bad:~y3~%~%Attempting to prove ``plausible''s yields:~%~y4~%" ,fns (len terms) no-ce has-ce proved ,size)
-     (mv proved state))))
+     ; (cw "~%Given the theory of ~x0, generated ~x1 terms of size ~x5.~%~%Counterexample checking segmented them:~%plausible:~y2~%~%bad:~y3~%~%Attempting to prove ``plausible''s yields:~%~y4~%" ,fns (len terms) no-ce has-ce proved ,size)
+     (cw
+      "~%~%====================~%\
+Given the theory of ~y0, we generated ~x1 conjectures of size ~x2.~%\
+We were able to prove ~x3 conjectures, namely:~%~y4~%"
+      ,fns (length terms) ,size num-proved proved-pretty)
+     (mv num-proved state))))
 
- (make-termM '(equal rev2 len) 5)
+ (make-termM '(equal rev2 len) 4)
  (genM '(equal rev2 len) 4)
- 
+
  ;; (defmacro make-termM (fns size)
  ;;   `(with-output
  ;;     :stack :push
@@ -575,10 +598,4 @@
  ; TODO
  ; - figure out what's going on with cgen with the 3-fn gen (incl. len) vs 2-fn.
  ;   Maybe we can just get rid of cgen?
- ; - prune identical forms (up to renaming of variables)
- ; - introduce type constraints
- ;   - pull out constraints from guards
- ;   - get return types of functions and only instantiate them in holes that
- ;     correspond with the types that are expected in corresponding hole
- ;     parameters.
  ; - Need to convert to logic mode (relatively low priority)
