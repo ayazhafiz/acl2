@@ -1,3 +1,4 @@
+; vim: foldmethod=marker
 (include-book "books/acl2s/cgen/top")
 (include-book "books/kestrel/std/system/add-suffix-to-fn-or-const")
 (include-book "books/std/util/defprojection")
@@ -70,7 +71,7 @@
   (if (= n 1) (list 1) (cons n (list-of-n (- n 1)))))
 
 
-;;;;; GEN STATE
+;;;;; GEN STATE {{{
 
 (defun st-new (fn-data nmax-vars)
   (declare (xargs :guard (fndata-p fn-data) :verify-guards nil))
@@ -102,9 +103,9 @@
   (declare (xargs :mode :program :guard (st-p st) :verify-guards nil))
   (if (assoc fn (st-get 'fns st)) t nil))
 
-(defun st-fn-arity (st fn)
-  (declare (xargs :mode :program :guard (st-p st) :verify-guards nil))
-  (aget 'arity (aget fn (st-get 'fns st ))))
+(defun st-fn-data (st fn what)
+  (declare (xargs :mode :program :guard (and (st-p st) (symbolp what))))
+  (aget what (aget fn (st-get 'fns st ))))
 
 (defun st-get-terms (st size)
   (declare (xargs :mode :program :guard (st-p st) :verify-guards nil))
@@ -115,6 +116,8 @@
   (b* ((oldt (st-get 'cached-terms st))
        (newt (put-assoc size terms oldt)))
       (put-assoc 'cached-terms newt st)))
+
+; }}}
 
 (defun reflow-head-with-rests (st head rests)
   (declare (xargs :mode :program))
@@ -165,7 +168,7 @@
 ;       nil
 ;       (cons (fresh-name (car basis) avoid) (n-fresh-names (1- howmany) avoid (cdr basis)))))
 
-;;;;; HOLED TERM GENERATION
+;;;;; HOLED TERM GENERATION {{{
 
 (mutual-recursion
  ;; Creates a term sequence, given the possible sizes for the head term.
@@ -213,7 +216,7 @@
    (if (endp fns)
        (mv nil st)
        (let* ((fn (car fns))
-              (arity (st-fn-arity st fn)))
+              (arity (st-fn-data st fn 'arity)))
              (if (< arity size)
                  ; When (function name + arity) is less than or equal to the target
                  ; term size, we can fit that function in as an instance of the sized
@@ -244,9 +247,9 @@
                             (t (make-term--walkfns st (st-all-fns st) size)))))
         (st (st-cache-terms st size terms)))
        (mv terms st)))
- )
+ ) ; }}}
 
-;;;;; VARIABLE COLLECTION
+;;;;; VARIABLE COLLECTION {{{
 
 ;; Collects the variables present in a term.
 (define collect-vars ((st st-p) (term pseudo-termp))
@@ -262,6 +265,8 @@
                term)))
   )
 
+; }}}
+
 (def-const *empty-vars-store*
   (acons 'frozen nil
          (acons 'vars nil
@@ -271,7 +276,7 @@
   (put-assoc 'frozen t
              (put-assoc 'vars vars *empty-vars-store*)))
 
-;;;;; TERM REIFICATION
+;;;;; TERM REIFICATION {{{
 
 ;; Given a term with holes, places variables in those holes.
 ;; At each hole, the choices are either (1) any previously instantiated
@@ -315,8 +320,9 @@
                    :mode :program
                    :guard (and (st-p st) (pseudo-termp x))
                    (reify-term-top st x))
+;}}}
 
-;;;;; RTERM REIFICATION
+;;;;; RTERM REIFICATION {{{
 ;; Given a single concrete lterm and a list of holed rterms,
 ;;   1. collect the variables in the lterm (TODO collect these on-the-fly
 ;;      during reify-term)
@@ -332,7 +338,7 @@
   (if (endp rterms)
       nil
       (b* (((mv reified-rterms ?) (reify-term st (car rterms) vs))
-           (lrterms (pair-each lterm reified-rterms)))
+           (lrterms (pair-each lterm (enlist reified-rterms))))
           (append lrterms (reify-holed-rterms--inner st vs lterm (cdr rterms))))))
 
 (define reify-holed-rterms ((st st-p) (lterm pseudo-termp) (rterms listp))
@@ -345,20 +351,130 @@
                    :mode :program
                    :guard (and (st-p st) (pseudo-termp x) (listp holed-rterms))
                    (reify-holed-rterms st x holed-rterms))
+;}}}
 
-;;;;; HYPOTHESIS COLLECTION
+;;;; TERM REPR {{{
 
-;; Folds a pair (left, right) into a proper theorem
-;; (IMPLIES ,hyps (EQUAL ,left ,right))
-(define make-term--fold-into-thm ((lrpair consp))
+;; An lrpair is a pair of terms '(l r) for which a rewrite conjecture will be
+;; constructed.
+(defun lrpairp (lrpair)
+  (and (listp lrpair)
+       (= (length lrpair) 2)
+       (pseudo-termp (car lrpair))
+       (pseudo-termp (cadr lrpair))))
+
+;; An lrconj is a triple '(l r hyps) where l, r are terms and hyps is a list of
+;; terms constituting hypotheses.
+(defun lrconjp (lrconj)
+  (and (listp lrconj)
+       (= (length lrconj) 3)
+       (pseudo-termp (car lrconj))
+       (pseudo-termp (cadr lrconj))
+       (pseudo-term-listp (caddr lrconj))))
+
+; }}}
+
+;;;;; HYPOTHESIS COLLECTION {{{
+
+;; Given two lists of variables and substitution values, returns an alist where
+;; each element is a pair (var->substitution)
+(define make-substs ((vars pseudo-term-listp) (vals pseudo-term-listp))
   :mode :program
-  `(IMPLIES
-     (AND t)
-     (EQUAL ,(car lrpair) ,(cdr lrpair))))
+  (cond
+    ((and (endp vars) (endp vals)) nil)
+    ((or (endp vars) (endp vals))
+     (er hard 'top-level "vars and vals of different lengths: ~x0 and ~x1~%" vars vals))
+    (t (acons (car vars) (car vals) (make-substs (cdr vars) (cdr vals))))))
 
-(std::defprojection make-term--fold-into-thm-list (x)
+(define apply-substs ((term pseudo-termp) (substs alistp))
+  :mode :program
+  (cond
+    ((and (listp term) (endp term)) nil)
+    ((listp term)
+     (b* ((subst-term (or (aget (car term) substs) (car term))))
+         (cons subst-term (apply-substs (cdr term) substs))))
+    (t (or (aget term substs) term))))
+
+;; Given a pseudo-term for a function call, of form
+;;   (FN p1 p2 ...pn)
+;; returns "reasonable" hypotheses we can make about the term, namely from the
+;; guard of FN. Done by
+;;   1. extract the guard of FN
+;;   2. extract the formals of FN
+;;   3. create the substitutions [formal_i->parameter_i]i\in 1,\dots,n
+;;   4. apply the substitution to the guard
+(define extract-hyp-from-fn-call ((st st-p) (call pseudo-termp))
+  :mode :program
+  :guard (st-fn-exists st (car call)) ; make sure we're not getting nonsense from the hyps collector
+  ; :returns (hyp pseudo-termp)
+  (b* ((fn (car call))
+       (guard (st-fn-data st fn 'guard))
+       (formals (st-fn-data st fn 'formals))
+       (substs (make-substs formals (cdr call)))
+       )
+      (apply-substs guard substs)))
+
+;; Given a term of form
+;;   (FN A$ (FN2 B$ C$))
+;; extracts all hypotheses we can make about the term given its present
+;; functions and variables.
+;; Namely,
+;;   - for each function call, extract the function guards with the associated term values
+;;
+;; Returns a list of terms representing the hypotheses present in the term, or
+;; nil if there are none. Hypotheses are ordered from those recovered from
+;; innermost terms to those recovered from outermost terms.
+(define extract-hyps-from-term ((st st-p) (term pseudo-termp))
+  :mode :program
+  ; :returns (listp hyps)
+  (if (or (not (listp term)) (endp term))
+    ; Can't make any hypotheses from atoms.
+    nil
+    (b* (
+         ; This may be a function call, if we are at the start of the list. Check if
+         ; the first term is a function, and if so, extract the hypothesis.
+         (frontload-hyps (if (st-fn-exists st (car term))
+                              (list (extract-hyp-from-fn-call st term))
+                              nil))
+         ; The first term might itself be a nested function call, so get
+         ; hypotheses from those too.
+         (front-inner-hyps (extract-hyps-from-term st (car term)))
+         (rest-hyps (extract-hyps-from-term st (cdr term))))
+        (append (append front-inner-hyps rest-hyps) frontload-hyps))))
+
+;; Given an lrpair '(l r) returns an lrconj '(l r hyps) with the hypotheses
+;; absorbed from l and r in hyps.
+(define lrterm-hypothesize ((st st-p) (lrpair lrpairp))
+  :mode :program
+  ; :returns (lrconjp conj)
+  (prog2$ (cw "~% pair:~x0~%" lrpair)
+   (append lrpair (list (append (extract-hyps-from-term st (car lrpair))
+                                (extract-hyps-from-term st (cadr lrpair)))))))
+
+(std::defprojection lrterm2conj-list ((st st-p) (x listp))
                     :mode :program
-                    (make-term--fold-into-thm x))
+                    (lrterm-hypothesize st x))
+
+;}}}
+
+;;;;; THEOREM CREATION {{{
+
+;; Folds an lrconj (left right hyps) into a proper theorem
+;; (IMPLIES ,hyps (EQUAL ,left ,right))
+(define lrconj2thm ((lrconj lrconjp))
+  :mode :program
+  (prog2$ (cw "~% conj:~x0~%" lrconj)
+   `(IMPLIES
+     ,(cons 'AND (caddr lrconj))
+     (EQUAL ,(car lrconj) ,(cadr lrconj)))))
+
+(std::defprojection lrconj2thm-list (x)
+                    :mode :program
+                    (lrconj2thm x))
+
+;}}}
+
+;;;;; MAIN DRIVERS
 
 (defun make-term-top (fn-data size)
   (declare (xargs :mode :program))
@@ -377,10 +493,13 @@
        ; (4) for each lterm, instantiate one of each rterm with concrete
        ; variables from the set of variables in the lterm. Now we have pairs
        ; of concrete terms (left, right) to be used in a theorem.
-       (lr-term-pairs (pair-lterms-holed-rterms st lterms rterms-holed))
-       ; (5) collapse terms into a theorem
-       (eq-terms (make-term--fold-into-thm-list lr-term-pairs)))
-      eq-terms))
+       (lr-pairs (pair-lterms-holed-rterms st lterms rterms-holed))
+       ; (5) for each lrpair, generate a lrconj with hypotheses collected from
+       ; the l/r terms.
+       (lr-conjs (lrterm2conj-list st lr-pairs))
+       ; (6) collapse lrconjs into a theorem
+       (thms (lrconj2thm-list lr-conjs)))
+      thms))
 
 (defmacro fn-dataM (fns)
   `(fn-datas ,fns state))
@@ -388,10 +507,17 @@
 (defmacro make-termM (fns size)
   `(make-term-top (fn-dataM ,fns) ,size))
 
+; TODO
+; HARD ACL2 ERROR in RAW-EV-FNCALL:  We had thought that *1* functions
+; were always defined outside the first pass of initialization, but the
+; *1* function for AND, which should be ACL2_*1*_COMMON-LISP::AND, is
+; not.
+; Probably we are not sanitizing the term before passing it to the
+; waterfall.
 (defun proveit (term state)
   (declare (xargs :mode :program
                   :stobjs (state)))
-  (b* ((toprove term)
+  (b* ((toprove (prog2$ (cw "~%Now attempting proof of ~x0~%" term) term))
        ((mv erp trval state) (acl2::state-global-let*
                               ((acl2::inhibit-output-lst
                                 (cond (t #!acl2(set-difference-eq *valid-output-names* '(error))))))
@@ -426,7 +552,7 @@
      (mv proved state))))
 
  (make-termM '(equal rev2 len) 5)
- ; (genM '(equal rev2 len) 4)
+ (genM '(equal rev2 len) 4)
  
  ;; (defmacro make-termM (fns size)
  ;;   `(with-output
