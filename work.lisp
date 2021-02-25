@@ -74,7 +74,7 @@
 ;;;;; GEN STATE {{{
 
 (defun st-new (fn-data nmax-vars)
-  (declare (xargs :guard (fndata-p fn-data) :verify-guards nil))
+  ; (declare (xargs :guard (fndata-p fn-data) :verify-guards nil))
   (b* ((fns (acons 'fns fn-data nil))
        (cached-terms (acons 'cached-terms nil nil))
        (max-vars (acons 'max-vars nmax-vars nil)))
@@ -254,16 +254,14 @@
 ;; Collects the variables present in a term.
 (define collect-vars ((st st-p) (term pseudo-termp))
   :mode :program
-  (cond ((listp term)
-         (if (endp term)
-             nil
-             (if (st-fn-exists st (car term))
-                 (collect-vars st (cdr term))
-                 (cons (car term) (collect-vars st (cdr term))))))
-        (t (if (st-fn-exists st term)
-               nil
-               term)))
-  )
+  (if (listp term)
+      (if (endp term)
+          nil
+          (append (collect-vars st (car term)) (collect-vars st (cdr term))))
+
+      (if (st-fn-exists st term)
+          nil
+          (list term))))
 
 ; }}}
 
@@ -334,7 +332,7 @@
 (define pair-each ((lterm pseudo-termp) (rterms pseudo-term-listp))
   :mode :program
   (cond ((endp rterms) nil)
-        ;((equal lterm (caar rterms)) (pair-each lterm (cdr rterms)))
+        ((equal lterm (caar rterms)) (pair-each lterm (cdr rterms)))
         (t (cons (cons lterm (car rterms)) (pair-each lterm (cdr rterms))))))
 
 (define reify-holed-rterms--inner ((st st-p) (vs listp) (lterm pseudo-termp) (rterms listp))
@@ -347,7 +345,7 @@
 
 (define reify-holed-rterms ((st st-p) (lterm pseudo-termp) (rterms listp))
   :mode :program
-  (b* ((lvars (collect-vars st lterm))
+  (b* ((lvars (remove-duplicates-equal (collect-vars st lterm)))
        (vs (frozen-vars-store lvars)))
       (reify-holed-rterms--inner st vs lterm rterms)))
 
@@ -447,13 +445,21 @@
            (rest-hyps (extract-hyps-from-term st (cdr term))))
           (append (append front-inner-hyps rest-hyps) frontload-hyps))))
 
+(define normalize-hyps ((hyps pseudo-term-listp))
+  :mode :program
+  (b* ((hyps (remove-duplicates-equal hyps))
+       (hyps (remove-equal ''T  hyps)))
+      hyps))
+
 ;; Given an lrpair '(l r) returns an lrconj '(l r hyps) with the hypotheses
 ;; absorbed from l and r in hyps.
 (define lrterm-hypothesize ((st st-p) (lrpair lrpairp))
   :mode :program
   ; :returns (lrconjp conj)
-  (append lrpair (list (append (extract-hyps-from-term st (car lrpair))
-                               (extract-hyps-from-term st (cadr lrpair))))))
+  (b* ((hyps (append (extract-hyps-from-term st (car lrpair))
+                     (extract-hyps-from-term st (cadr lrpair))))
+       (hyps (normalize-hyps hyps)))
+      (append lrpair (list hyps))))
 
 (std::defprojection lrterm2conj-list ((st st-p) (x listp))
                     :mode :program
@@ -467,9 +473,12 @@
 ;; (IMPLIES ,hyps (EQUAL ,left ,right))
 (define lrconj2thm ((lrconj lrconjp))
   :mode :program
-  `(IMPLIES
-    ,(cons 'AND (caddr lrconj))
-    (EQUAL ,(car lrconj) ,(cadr lrconj))))
+  (if (caddr lrconj)
+    `(IMPLIES
+        ,(cons 'AND (caddr lrconj))
+        (EQUAL ,(car lrconj) ,(cadr lrconj)))
+    `(EQUAL ,(car lrconj) ,(cadr lrconj))
+    ))
 
 (std::defprojection lrconj2thm-list (x)
                     :mode :program
@@ -492,13 +501,9 @@
 
 ;;;;; MAIN DRIVERS
 
-(defun make-term-top (fn-data size)
+(defun make-rw-conjectures (fn-data left right)
   (declare (xargs :mode :program))
-  (b* (
-       ; (1) break up sizes - left >= right
-       (left (ceiling size 2))
-       (right (- size left))
-       (st (st-new fn-data left))
+  (b* ((st (st-new fn-data left))
        ; (2) create holed terms
        ((mv lterms-holed st) (make-term st left))
        ((mv rterms-holed st) (if (= left right)
@@ -520,8 +525,11 @@
 (defmacro fn-dataM (fns)
   `(fn-datas ,fns state))
 
+(defmacro single-termM (fns size)
+  `(make-term (fn-dataM ,fns) ,size))
+
 (defmacro make-termM (fns size)
-  `(make-term-top (fn-dataM ,fns) ,size))
+  `(make-rw-conjectures (fn-dataM ,fns) (ceiling ,size 2) (- ,size (ceiling ,size 2))))
 
 (defun proveit (term state)
   (declare (xargs :mode :program
@@ -544,10 +552,6 @@
 (defun runit (terms state cnt total)
   (declare (xargs :mode :program
                   :stobjs (state)))
-  (prog2$
-   (if (= 0 (mod (- total cnt) 100))
-       (cw "~x0/~x1...~%" (- total cnt) total)
-       nil)
    (if (endp terms) (mv nil nil nil state)
        (b* ((term (car terms))
             ((mv proved no-ce has-ce state) (runit (cdr terms) state (1+ cnt) total))
@@ -556,22 +560,27 @@
             (proved1 (if prove-okp (cons term proved) proved))
             (no-ce1 (if nil (cons term no-ce) no-ce))
             (has-ce1 (if nil has-ce (cons term has-ce))))
-           (mv proved1 no-ce1 has-ce1 state)))))
+           (prog2$ (if (= 0 (mod (- total cnt) 10))
+                     (cw "~x0/~x1...~%" (- total cnt) total)
+                     nil)
+                   (mv proved1 no-ce1 has-ce1 state)))))
 
 (defmacro genM (fns size)
-  `(b* ((terms (make-term-top (fn-datas ,fns state) ,size))
+  `(b* ((left (ceiling ,size 2))
+        (right (- ,size left))
+        (terms (make-rw-conjectures (fn-datas ,fns state) left right))
         ((mv proved ?no-ce ?has-ce state) (prog2$
                                            (cw "~%Testing ~x0 conjectures...~%" (length terms))
-                                           (runit terms state)))
+                                           (runit terms state 0 (length terms))))
         (num-proved (len proved))
         ((mv proved-pretty state) (prettify-term-list proved state)))
     (prog2$
      ; (cw "~%Given the theory of ~x0, generated ~x1 terms of size ~x5.~%~%Counterexample checking segmented them:~%plausible:~y2~%~%bad:~y3~%~%Attempting to prove ``plausible''s yields:~%~y4~%" ,fns (len terms) no-ce has-ce proved ,size)
      (cw
-      "~%~%====================~%\
-Given the theory of ~y0, we generated ~x1 conjectures of size ~x2.~%\
-We were able to prove ~x3 conjectures, namely:~%~y4~%"
-      ,fns (length terms) ,size num-proved proved-pretty)
+      "~%====================~%\
+Given the theory of ~y0, we generated ~x1 conjectures of bigsize ~x2 (left=~x3,right<=~x4).~%\
+We were able to prove ~x5 conjectures, namely:~%~y6~%"
+      ,fns (length terms) ,size left right num-proved proved-pretty)
      (mv num-proved state))))
 
  (make-termM '(equal rev2 len) 4)
