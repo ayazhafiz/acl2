@@ -153,20 +153,11 @@
 
 (def-const *GEN-HOLE* '_HOLE_)
 
-; (def-const *base-var-names*
-;   '(X Y Z A B C D G L K M N))
-
 (defun fresh-name (base avoid)
   (declare (xargs :mode :program))
   (if (member base avoid)
       (fresh-name (add-suffix-to-fn-or-const base '$) avoid)
       base))
-
-; (defun n-fresh-names (howmany avoid basis)
-;   (declare (xargs :mode :program))
-;   (if (zerop howmany)
-;       nil
-;       (cons (fresh-name (car basis) avoid) (n-fresh-names (1- howmany) avoid (cdr basis)))))
 
 ;;;;; HOLED TERM GENERATION {{{
 
@@ -247,7 +238,17 @@
                             (t (make-term--walkfns st (st-all-fns st) size)))))
         (st (st-cache-terms st size terms)))
        (mv terms st)))
- ) ; }}}
+ )
+
+(define terms-of-sizes ((st st-p) ns)
+  :mode :program
+  (if (endp ns)
+    (mv nil st)
+    (b* (((mv rst st) (terms-of-sizes st (cdr ns)))
+         ((mv cur st) (make-term st (car ns))))
+        (mv (append cur rst) st))))
+
+; }}}
 
 ;;;;; VARIABLE COLLECTION {{{
 
@@ -282,31 +283,31 @@
 (define reify-term ((st st-p) (term pseudo-termp) (vs alistp))
   :mode :program :verify-guards nil
   (cond ((and (listp term) (endp term)) (mv (list nil) vs))
-        ((st-fn-exists st term) (mv (list term) vs))
-        ((and (listp term)
-              (not (eq (car term) *GEN-HOLE*)))
-         (b* (((mv heads vs) (reify-term st (car term) vs))
-              ((mv tails vs) (reify-term st (cdr term) vs)))
-             (mv (reflow-heads-with-rests st heads tails) vs)))
-        (t ; (and (listp term) (eq (car term) *GEN-HOLE*))
-           (b* ((vs (if (aget 'frozen vs)
-                        ; frozen => use present vars
-                        vs
-                        ; not frozen => add a fresh variable, then any present variable is a choice
-                        (b* ((avoid (append (aget 'vars vs) (st-all-fns st)))
-                             (symno (aget 'sym vs))
-                             (basis (intern (string (code-char symno)) "ACL2"))
-                             (fresh (fresh-name basis avoid))
-                             (allvars (cons fresh (aget 'vars vs)))
-                             (vs (put-assoc 'vars allvars vs))
-                             (vs (put-assoc 'sym (1+ symno) vs)))
-                            vs)))
-                (possible-vars (aget 'vars vs))
-                ((mv tails vs) (reify-term st (cdr term) vs)))
-               (mv
-                (reflow-heads-with-rests st possible-vars tails)
-                vs)))
-        )
+         ((st-fn-exists st term) (mv (list term) vs))
+         ((and (listp term)
+               (not (eq (car term) *GEN-HOLE*)))
+          (b* (((mv heads vs) (reify-term st (car term) vs))
+               ((mv tails vs) (reify-term st (cdr term) vs)))
+              (mv (reflow-heads-with-rests st heads tails) vs)))
+         (t ; (and (listp term) (eq (car term) *GEN-HOLE*))
+            (b* ((vs (if (aget 'frozen vs)
+                         ; frozen => use present vars
+                         vs
+                         ; not frozen => add a fresh variable, then any present variable is a choice
+                         (b* ((avoid (append (aget 'vars vs) (st-all-fns st)))
+                              (symno (aget 'sym vs))
+                              (basis (intern (string (code-char symno)) "ACL2"))
+                              (fresh (fresh-name basis avoid))
+                              (allvars (cons fresh (aget 'vars vs)))
+                              (vs (put-assoc 'vars allvars vs))
+                              (vs (put-assoc 'sym (1+ symno) vs)))
+                             vs)))
+                 (possible-vars (aget 'vars vs))
+                 ((mv tails vs) (if (listp term) (reify-term st (cdr term) vs) (mv nil vs))))
+                (mv
+                 (reflow-heads-with-rests st possible-vars tails)
+                 vs)))
+         )
   )
 
 (define reify-term-top ((st st-p) (term pseudo-termp))
@@ -506,9 +507,7 @@
   (b* ((st (st-new fn-data left))
        ; (2) create holed terms
        ((mv lterms-holed st) (make-term st left))
-       ((mv rterms-holed st) (if (= left right)
-                                 (mv lterms-holed st)
-                                 (make-term st right)))
+       ((mv rterms-holed st) (terms-of-sizes st (list-of-n right)))
        ; (3) instantiate lterms with concrete vars
        (lterms (reify-term-list st lterms-holed))
        ; (4) for each lterm, instantiate one of each rterm with concrete
@@ -575,16 +574,23 @@
         (num-proved (len proved))
         ((mv proved-pretty state) (prettify-term-list proved state)))
     (prog2$
-     ; (cw "~%Given the theory of ~x0, generated ~x1 terms of size ~x5.~%~%Counterexample checking segmented them:~%plausible:~y2~%~%bad:~y3~%~%Attempting to prove ``plausible''s yields:~%~y4~%" ,fns (len terms) no-ce has-ce proved ,size)
-     (cw
-      "~%====================~%\
-Given the theory of ~y0, we generated ~x1 conjectures of bigsize ~x2 (left=~x3,right<=~x4).~%\
-We were able to prove ~x5 conjectures, namely:~%~y6~%"
-      ,fns (length terms) ,size left right num-proved proved-pretty)
+      (prog2$ (cw "~%====================~%\
+Given the theory ~x0,\
+we generated ~x1 conjectures of bigsize ~x2 (left=~x3,right<=~x4).~%"
+,fns (length terms) ,size left right)
+              (if zerop num-proved)
+              (cw "~%Unfortunately, we failed to prove any conjecture true.")
+              (cw "We were able to prove ~x1 conjectures, namely:~%~y2~%"
+                  num-proved proved-pretty))
      (mv num-proved state))))
 
  (make-termM '(equal rev2 len) 4)
  (genM '(equal rev2 len) 4)
+
+(defthm mytrue 
+ (IMPLIES (AND (LISTP A))
+          (EQUAL (REVERSE (REVERSE (REVERSE A)))
+                 (REVERSE A))))
 
  ;; (defmacro make-termM (fns size)
  ;;   `(with-output
