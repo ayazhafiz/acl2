@@ -10,7 +10,7 @@
 (defun rev2 (x)
   (declare (xargs :guard (listp x) :VERIFY-GUARDS NIL))
   (if (consp x)
-      (append (rev2 (cdr x)) (car x))
+      (append (rev2 (cdr x)) (list (car x)))
       nil))
 
 ; (test? (equal (rev (rev x)) x))
@@ -240,13 +240,13 @@
        (mv terms st)))
  )
 
-(define terms-of-sizes ((st st-p) ns)
+(define holed-terms-of-sizes ((st st-p) ns)
   :mode :program
   (if (endp ns)
-    (mv nil st)
-    (b* (((mv rst st) (terms-of-sizes st (cdr ns)))
-         ((mv cur st) (make-term st (car ns))))
-        (mv (append cur rst) st))))
+      (mv nil st)
+      (b* (((mv rst st) (holed-terms-of-sizes st (cdr ns)))
+           ((mv cur st) (make-term st (car ns))))
+          (mv (append cur rst) st))))
 
 ; }}}
 
@@ -259,7 +259,7 @@
       (if (endp term)
           nil
           (append (collect-vars st (car term)) (collect-vars st (cdr term))))
-
+      
       (if (st-fn-exists st term)
           nil
           (list term))))
@@ -283,31 +283,33 @@
 (define reify-term ((st st-p) (term pseudo-termp) (vs alistp))
   :mode :program :verify-guards nil
   (cond ((and (listp term) (endp term)) (mv (list nil) vs))
-         ((st-fn-exists st term) (mv (list term) vs))
-         ((and (listp term)
-               (not (eq (car term) *GEN-HOLE*)))
-          (b* (((mv heads vs) (reify-term st (car term) vs))
-               ((mv tails vs) (reify-term st (cdr term) vs)))
-              (mv (reflow-heads-with-rests st heads tails) vs)))
-         (t ; (and (listp term) (eq (car term) *GEN-HOLE*))
-            (b* ((vs (if (aget 'frozen vs)
-                         ; frozen => use present vars
-                         vs
-                         ; not frozen => add a fresh variable, then any present variable is a choice
-                         (b* ((avoid (append (aget 'vars vs) (st-all-fns st)))
-                              (symno (aget 'sym vs))
-                              (basis (intern (string (code-char symno)) "ACL2"))
-                              (fresh (fresh-name basis avoid))
-                              (allvars (cons fresh (aget 'vars vs)))
-                              (vs (put-assoc 'vars allvars vs))
-                              (vs (put-assoc 'sym (1+ symno) vs)))
-                             vs)))
-                 (possible-vars (aget 'vars vs))
-                 ((mv tails vs) (if (listp term) (reify-term st (cdr term) vs) (mv nil vs))))
-                (mv
-                 (reflow-heads-with-rests st possible-vars tails)
-                 vs)))
-         )
+        ((st-fn-exists st term) (mv (list term) vs))
+        ((and (listp term)
+              (not (eq (car term) *GEN-HOLE*)))
+         (b* (((mv heads vs) (reify-term st (car term) vs))
+              ((mv tails vs) (reify-term st (cdr term) vs)))
+             (mv (reflow-heads-with-rests st heads tails) vs)))
+        (t ; (and (listp term) (eq (car term) *GEN-HOLE*))
+           ; Either a list where the first term is a hole,
+           ; or an atom that is a hole.
+           (b* ((vs (if (aget 'frozen vs)
+                        ; frozen => use present vars
+                        vs
+                        ; not frozen => add a fresh variable, then any present variable is a choice
+                        (b* ((avoid (append (aget 'vars vs) (st-all-fns st)))
+                             (symno (aget 'sym vs))
+                             (basis (intern (string (code-char symno)) "ACL2"))
+                             (fresh (fresh-name basis avoid))
+                             (allvars (cons fresh (aget 'vars vs)))
+                             (vs (put-assoc 'vars allvars vs))
+                             (vs (put-assoc 'sym (1+ symno) vs)))
+                            vs)))
+                (possible-vars (aget 'vars vs))
+                ((mv tails vs) (if (listp term) (reify-term st (cdr term) vs) (mv nil vs))))
+               (if (listp term)
+                   (mv (reflow-heads-with-rests st possible-vars tails) vs)
+                   (mv possible-vars vs))))
+        )
   )
 
 (define reify-term-top ((st st-p) (term pseudo-termp))
@@ -340,8 +342,8 @@
   :mode :program
   (if (endp rterms)
       nil
-      (b* (((mv reified-rterms ?) (reify-term st (car rterms) vs))
-           (lrterms (pair-each lterm (enlist reified-rterms))))
+      (b* (((mv reified-rterms ?) (reify-term st (prog2$ (cw "reifying term: ~x0 ~%~%" (car rterms)) (car rterms)) vs))
+           (lrterms (pair-each (prog2$ (cw "ll:~x0" lterm) lterm) (prog2$ (cw "rr:~x0~%~%" reified-rterms) (enlist reified-rterms)))))
           (append lrterms (reify-holed-rterms--inner st vs lterm (cdr rterms))))))
 
 (define reify-holed-rterms ((st st-p) (lterm pseudo-termp) (rterms listp))
@@ -475,11 +477,11 @@
 (define lrconj2thm ((lrconj lrconjp))
   :mode :program
   (if (caddr lrconj)
-    `(IMPLIES
+      `(IMPLIES
         ,(cons 'AND (caddr lrconj))
         (EQUAL ,(car lrconj) ,(cadr lrconj)))
-    `(EQUAL ,(car lrconj) ,(cadr lrconj))
-    ))
+      `(EQUAL ,(car lrconj) ,(cadr lrconj))
+      ))
 
 (std::defprojection lrconj2thm-list (x)
                     :mode :program
@@ -507,16 +509,16 @@
   (b* ((st (st-new fn-data left))
        ; (2) create holed terms
        ((mv lterms-holed st) (make-term st left))
-       ((mv rterms-holed st) (terms-of-sizes st (list-of-n right)))
+       ((mv rterms-holed st) (holed-terms-of-sizes st (list-of-n right)))
        ; (3) instantiate lterms with concrete vars
        (lterms (reify-term-list st lterms-holed))
        ; (4) for each lterm, instantiate one of each rterm with concrete
        ; variables from the set of variables in the lterm. Now we have pairs
        ; of concrete terms (left, right) to be used in a theorem.
-       (lr-pairs (pair-lterms-holed-rterms st lterms rterms-holed))
+       (lr-pairs (pair-lterms-holed-rterms st lterms (prog2$ (cw "using::~x0~%~%" rterms-holed) rterms-holed)))
        ; (5) for each lrpair, generate a lrconj with hypotheses collected from
        ; the l/r terms.
-       (lr-conjs (lrterm2conj-list st lr-pairs))
+       (lr-conjs (lrterm2conj-list st (prog2$ (cw "got pairs: ~x0~%" lr-pairs) lr-pairs)))
        ; (6) collapse lrconjs into a theorem
        (thms (lrconj2thm-list lr-conjs)))
       thms))
@@ -551,18 +553,18 @@
 (defun runit (terms state cnt total)
   (declare (xargs :mode :program
                   :stobjs (state)))
-   (if (endp terms) (mv nil nil nil state)
-       (b* ((term (car terms))
-            ((mv proved no-ce has-ce state) (runit (cdr terms) state (1+ cnt) total))
-            ; ((mv ? no-ce-p state) (acl2s::test?-fn term nil nil state))
-            ((mv prove-okp state) (if t (proveit term state) (mv nil state)))
-            (proved1 (if prove-okp (cons term proved) proved))
-            (no-ce1 (if nil (cons term no-ce) no-ce))
-            (has-ce1 (if nil has-ce (cons term has-ce))))
-           (prog2$ (if (= 0 (mod (- total cnt) 10))
-                     (cw "~x0/~x1...~%" (- total cnt) total)
-                     nil)
-                   (mv proved1 no-ce1 has-ce1 state)))))
+  (if (endp terms) (mv nil nil nil state)
+      (b* ((term (car terms))
+           ((mv proved no-ce has-ce state) (runit (cdr terms) state (1+ cnt) total))
+           ; ((mv ? no-ce-p state) (acl2s::test?-fn term nil nil state))
+           ((mv prove-okp state) (if t (proveit term state) (mv nil state)))
+           (proved1 (if prove-okp (cons term proved) proved))
+           (no-ce1 (if nil (cons term no-ce) no-ce))
+           (has-ce1 (if nil has-ce (cons term has-ce))))
+          (prog2$ (if (= 0 (mod (- total cnt) 10))
+                      (cw "~x0/~x1...~%" (- total cnt) total)
+                      nil)
+                  (mv proved1 no-ce1 has-ce1 state)))))
 
 (defmacro genM (fns size)
   `(b* ((left (ceiling ,size 2))
@@ -574,43 +576,49 @@
         (num-proved (len proved))
         ((mv proved-pretty state) (prettify-term-list proved state)))
     (prog2$
-      (prog2$ (cw "~%====================~%\
+     (prog2$ (cw "~%====================~%\
 Given the theory ~x0,\
 we generated ~x1 conjectures of bigsize ~x2 (left=~x3,right<=~x4).~%"
-,fns (length terms) ,size left right)
-              (if zerop num-proved)
-              (cw "~%Unfortunately, we failed to prove any conjecture true.")
-              (cw "We were able to prove ~x1 conjectures, namely:~%~y2~%"
-                  num-proved proved-pretty))
+                 ,fns (length terms) ,size left right)
+             (if (zerop num-proved)
+                 (cw "~%Unfortunately, we failed to prove any conjecture true.~%")
+                 (cw "We were able to prove ~x0 conjectures, namely:~%~y1~%"
+                     num-proved proved-pretty)))
      (mv num-proved state))))
 
- (make-termM '(equal rev2 len) 4)
- (genM '(equal rev2 len) 4)
+(defmacro prove-wrapper (term)
+  `(acl2::prove ,term (acl2::make-pspv (acl2::ens state) (w state) state) (acl2::default-hints (w state)) (acl2::ens state) (w state) "thm..." state))
 
-(defthm mytrue 
- (IMPLIES (AND (LISTP A))
-          (EQUAL (REVERSE (REVERSE (REVERSE A)))
-                 (REVERSE A))))
+(make-termM '(equal rev2 len) 4)
+(genM '(equal rev2 len) 6)
 
- ;; (defmacro make-termM (fns size)
- ;;   `(with-output
- ;;     :stack :push
- ;;     ,:on :all
- ;;     :gag-mode ,(not t)
- ;;     (make-event
- ;;      (make-term (fns-w-arities fns state) size))))
- 
- ; NOTES
- ; - we can grab type prescription of a known term with type-set, f.x.
- ;     (type-set '(integerp x) nil nil nil (ens state) (w state) nil nil nil)
- ;   gives
- ;     (135 ((LEMMA (:TYPE-PRESCRIPTION ARITY))))
- ; - can grab function guards with (guard ...)
- ; - can grab formal param names with (formals ...)
- ; - can grab function arity with (arity ...)
- ; - need to find a way to "instantiate" a subtype (look at cgen for this)
- 
- ; TODO
- ; - figure out what's going on with cgen with the 3-fn gen (incl. len) vs 2-fn.
- ;   Maybe we can just get rid of cgen?
- ; - Need to convert to logic mode (relatively low priority)
+;; (defmacro make-termM (fns size)
+;;   `(with-output
+;;     :stack :push
+;;     ,:on :all
+;;     :gag-mode ,(not t)
+;;     (make-event
+;;      (make-term (fns-w-arities fns state) size))))
+
+; NOTES
+; - we can grab type prescription of a known term with type-set, f.x.
+;     (type-set '(integerp x) nil nil nil (ens state) (w state) nil nil nil)
+;   gives
+;     (135 ((LEMMA (:TYPE-PRESCRIPTION ARITY))))
+; - can grab function guards with (guard ...)
+; - can grab formal param names with (formals ...)
+; - can grab function arity with (arity ...)
+; - need to find a way to "instantiate" a subtype (look at cgen for this)
+
+; TODO
+; - figure out what's going on with cgen with the 3-fn gen (incl. len) vs 2-fn.
+;   Maybe we can just get rid of cgen?
+; - Need to convert to logic mode (relatively low priority)
+; - How can we better deal with the hypotheses we are introducing?
+;   So far:
+;   - pull out function guards as hyps
+;   What else can we do?
+;   - "generate" hypotheses
+;     - this seems futile - where would we generate them from
+;   - perhaps, pull out failed subgoals as new, additional hypotheses for the
+;     conjecture
