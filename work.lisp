@@ -1,14 +1,14 @@
 ; vim: foldmethod=marker
-(include-book "books/acl2s/cgen/top")
+; (include-book "books/acl2s/cgen/top")
 (include-book "books/kestrel/std/system/add-suffix-to-fn-or-const")
 (include-book "books/std/util/defprojection")
 (include-book "books/std/util/defmapappend")
 
 (ubt! 'fndata-p)
-(acl2s-defaults :set verbosity-level 4)
+; (acl2s-defaults :set verbosity-level 4)
 
 (defun rev2 (x)
-  (declare (xargs :guard (listp x) :VERIFY-GUARDS NIL))
+  (declare (xargs :guard (true-listp x) :VERIFY-GUARDS NIL))
   (if (consp x)
       (append (rev2 (cdr x)) (list (car x)))
       nil))
@@ -22,16 +22,16 @@
   (cw  "~|vars: ~x0~|" (all-vars form))
   )
 
-(defmacro getvarsM (form &rest kwd-val-lst)
-  (let* ((vl-entry (assoc-keyword :verbosity-level kwd-val-lst))
-         (vl (and vl-entry (cadr vl-entry)))
-         (debug (and (natp vl) (cgen::debug-flag vl))))
-        `(with-output
-          :stack :push
-          ,(if debug :on :off) :all
-          :gag-mode ,(not debug)
-          (make-event
-           (getvars ',form state)))))
+; (defmacro getvarsM (form &rest kwd-val-lst)
+;   (let* ((vl-entry (assoc-keyword :verbosity-level kwd-val-lst))
+;          (vl (and vl-entry (cadr vl-entry)))
+;          (debug (and (natp vl) (cgen::debug-flag vl))))
+;         `(with-output
+;           :stack :push
+;           ,(if debug :on :off) :all
+;           :gag-mode ,(not debug)
+;           (make-event
+;            (getvars ',form state)))))
 
 (defun getfuncs (form state)
   (declare (xargs :mode :program
@@ -151,7 +151,7 @@
       nil
       (cons (list (car lst)) (enlist (cdr lst)))))
 
-(def-const *GEN-HOLE* '_HOLE_)
+(defconst *GEN-HOLE* '_HOLE_)
 
 (defun fresh-name (base avoid)
   (declare (xargs :mode :program))
@@ -266,7 +266,7 @@
 
 ; }}}
 
-(def-const *empty-vars-store*
+(defconst *empty-vars-store*
   (acons 'frozen nil
          (acons 'vars nil
                 (acons 'sym 65 nil))))
@@ -342,8 +342,8 @@
   :mode :program
   (if (endp rterms)
       nil
-      (b* (((mv reified-rterms ?) (reify-term st (prog2$ (cw "reifying term: ~x0 ~%~%" (car rterms)) (car rterms)) vs))
-           (lrterms (pair-each (prog2$ (cw "ll:~x0" lterm) lterm) (prog2$ (cw "rr:~x0~%~%" reified-rterms) (enlist reified-rterms)))))
+      (b* (((mv reified-rterms ?) (reify-term st (car rterms) vs))
+           (lrterms (pair-each lterm (enlist reified-rterms))))
           (append lrterms (reify-holed-rterms--inner st vs lterm (cdr rterms))))))
 
 (define reify-holed-rterms ((st st-p) (lterm pseudo-termp) (rterms listp))
@@ -515,10 +515,10 @@
        ; (4) for each lterm, instantiate one of each rterm with concrete
        ; variables from the set of variables in the lterm. Now we have pairs
        ; of concrete terms (left, right) to be used in a theorem.
-       (lr-pairs (pair-lterms-holed-rterms st lterms (prog2$ (cw "using::~x0~%~%" rterms-holed) rterms-holed)))
+       (lr-pairs (pair-lterms-holed-rterms st lterms rterms-holed))
        ; (5) for each lrpair, generate a lrconj with hypotheses collected from
        ; the l/r terms.
-       (lr-conjs (lrterm2conj-list st (prog2$ (cw "got pairs: ~x0~%" lr-pairs) lr-pairs)))
+       (lr-conjs (lrterm2conj-list st lr-pairs))
        ; (6) collapse lrconjs into a theorem
        (thms (lrconj2thm-list lr-conjs)))
       thms))
@@ -590,7 +590,17 @@ we generated ~x1 conjectures of bigsize ~x2 (left=~x3,right<=~x4).~%"
   `(acl2::prove ,term (acl2::make-pspv (acl2::ens state) (w state) state) (acl2::default-hints (w state)) (acl2::ens state) (w state) "thm..." state))
 
 (make-termM '(equal rev2 len) 4)
-(genM '(equal rev2 len) 6)
+(genM '(rev2 len) 6)
+
+; (defthm my-len-of-rev (IMPLIES (AND (IF (TRUE-LISTP A)
+;                                         (TRUE-LISTP A)
+;                                         (STRINGP A)))
+;                                (EQUAL (LEN (REVERSE A)) (LEN A)))
+;   :hints (("Goal"
+;            :in-theory (set-difference-theories
+;                        (current-theory :here)
+;                        nil)
+;            )))
 
 ;; (defmacro make-termM (fns size)
 ;;   `(with-output
@@ -611,9 +621,6 @@ we generated ~x1 conjectures of bigsize ~x2 (left=~x3,right<=~x4).~%"
 ; - need to find a way to "instantiate" a subtype (look at cgen for this)
 
 ; TODO
-; - figure out what's going on with cgen with the 3-fn gen (incl. len) vs 2-fn.
-;   Maybe we can just get rid of cgen?
-; - Need to convert to logic mode (relatively low priority)
 ; - How can we better deal with the hypotheses we are introducing?
 ;   So far:
 ;   - pull out function guards as hyps
@@ -622,3 +629,11 @@ we generated ~x1 conjectures of bigsize ~x2 (left=~x3,right<=~x4).~%"
 ;     - this seems futile - where would we generate them from
 ;   - perhaps, pull out failed subgoals as new, additional hypotheses for the
 ;     conjecture
+; - Hypothesis pruning
+;   - when a theorem is proven, attempt to remove hypotheses so long as we have
+;     that the theorem continues to hold
+; TODO backburner
+; * figure out what's going on with cgen with the 3-fn gen (incl. len) vs 2-fn.
+;   Maybe we can just get rid of cgen?
+;   - Resolution: not using cgen at all for now
+; * Need to convert to logic mode (relatively low priority)
