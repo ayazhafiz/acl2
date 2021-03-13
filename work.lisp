@@ -358,7 +358,7 @@
                    (reify-holed-rterms st x holed-rterms))
 ;}}}
 
-;;;; TERM REPR {{{
+;;;;; TERM REPR {{{
 
 ;; An lrpair is a pair of terms '(l r) for which a rewrite conjecture will be
 ;; constructed.
@@ -376,6 +376,9 @@
        (pseudo-termp (car lrconj))
        (pseudo-termp (cadr lrconj))
        (pseudo-term-listp (caddr lrconj))))
+
+(define pack-lrconj (l r hyps) (list l r hyps))
+(define unpack-lrconj ((lrconj lrconjp)) :mode :program (mv (car lrconj) (cadr lrconj) (caddr lrconj)))
 
 ; }}}
 
@@ -474,7 +477,7 @@
 
 ;; Folds an lrconj (left right hyps) into a proper theorem
 ;; (IMPLIES ,hyps (EQUAL ,left ,right))
-(define lrconj2thm ((lrconj lrconjp))
+(define thm-of-lrconj ((lrconj lrconjp))
   :mode :program
   (if (caddr lrconj)
       `(IMPLIES
@@ -483,9 +486,9 @@
       `(EQUAL ,(car lrconj) ,(cadr lrconj))
       ))
 
-(std::defprojection lrconj2thm-list (x)
+(std::defprojection thm-of-lrconj-list (x)
                     :mode :program
-                    (lrconj2thm x))
+                    (thm-of-lrconj x))
 
 
 ;; Given a term, put it in a form a user would want to see, since
@@ -499,6 +502,66 @@
            ((mv ? desugared state) (acl2::translate (car terms) t nil t "thm..." (w state) state))
            (sugared (acl2::untranslate desugared t (w state))))
           (mv (cons sugared rst) state))))
+
+;}}}
+
+;;;;; THM PROVING AND HYPOTHESIS PRUNING {{{
+
+(defun tryprove (term state)
+  (declare (xargs :mode :program
+                  :stobjs (state)))
+  ; TODO capture + handle error
+  (b* (((mv ? toprove state) (acl2::translate term t nil t "thm..." (w state) state))
+       ((mv erp trval state) (acl2::state-global-let*
+                              ((acl2::inhibit-output-lst *valid-output-names*)
+                               (acl2::print-clause-ids nil)
+                               )
+                              (acl2::prove toprove (acl2::make-pspv (acl2::ens state) (w state) state) (acl2::default-hints (w state)) (acl2::ens state) (w state) "thm..." state)))
+       ((mv ? prove-okp state) (mv erp (if erp (cadr trval) t) state))
+       )
+      ; (prog2$ (cw "~%Attempted proof of ~x0: erp ~x1, trivial ~x2~|" toprove erp trval)
+      (mv prove-okp state)
+      ; )
+      ))
+
+(mutual-recursion
+  (defun tryprove-pruning-hyps (l r incl-hyps rest-hyps state)
+    (declare (xargs :mode :program :stobjs state))
+    (if (endp rest-hyps)
+      (mv nil nil state)
+      (b* (((mv other-provedp best-other state) (tryprove-pruning-hyps l r (append incl-hyps (list (car rest-hyps))) (cdr rest-hyps) state))
+           (cand-hyps (append incl-hyps (cdr rest-hyps)))
+           ((mv cand-provedp best-from-cand-hyps state) (tryprove-simplest-conj l r cand-hyps state)))
+          (cond
+            ((and cand-provedp other-provedp)
+             (mv t (if (< (len best-other) (len best-from-cand-hyps)) best-other best-from-cand-hyps) state))
+            (cand-provedp (mv t best-from-cand-hyps state))
+            (other-provedp (mv t best-other state))
+            (t (mv nil nil state)))
+          )
+      ))
+  
+  (defun tryprove-simplest-conj (l r hyps state)
+    (declare (xargs :mode :program :stobjs state))
+    (b* (((mv provedp state) (tryprove (thm-of-lrconj (pack-lrconj l r hyps)) state)))
+        (if (not provedp)
+          (mv nil nil state)
+          ; We were able to prove the conjecture. Can we prove it with less hypotheses?
+          (b* (((mv provedwithless-p less-hyps state) (tryprove-pruning-hyps l r nil hyps state)))
+              (if provedwithless-p
+                (mv t less-hyps state) ; yes!
+                (mv t hyps state)) ; no, just use what we started with
+              )
+          )))
+)
+
+(define tryprove-simplest-conj-top ((lrconj lrconjp) state)
+  :mode :program
+  :stobjs state
+  (b* (((mv l r hyps) (unpack-lrconj lrconj))
+       ((mv provedp besthyps state) (tryprove-simplest-conj l r hyps state))
+       (conj (pack-lrconj l r besthyps)))
+      (mv provedp (thm-of-lrconj conj) state)))
 
 ;}}}
 
@@ -518,10 +581,10 @@
        (lr-pairs (pair-lterms-holed-rterms st lterms rterms-holed))
        ; (5) for each lrpair, generate a lrconj with hypotheses collected from
        ; the l/r terms.
-       (lr-conjs (lrterm2conj-list st lr-pairs))
+       (lr-conjs (lrterm2conj-list st lr-pairs)))
        ; (6) collapse lrconjs into a theorem
-       (thms (lrconj2thm-list lr-conjs)))
-      thms))
+       ; (thms (thm-of-lrconj-list lr-conjs)))
+      lr-conjs))
 
 (defmacro fn-dataM (fns)
   `(fn-datas ,fns state))
@@ -532,54 +595,29 @@
 (defmacro make-termM (fns size)
   `(make-rw-conjectures (fn-dataM ,fns) (ceiling ,size 2) (- ,size (ceiling ,size 2))))
 
-(defun proveit (term state)
+(defun test-conjs (terms state cnt total)
   (declare (xargs :mode :program
                   :stobjs (state)))
-  ; TODO catch error
-  (b* (((mv ? toprove state) (acl2::translate term t nil t "thm..." (w state) state))
-       ((mv erp trval state) (acl2::state-global-let*
-                              ((acl2::inhibit-output-lst *valid-output-names*)
-                               (acl2::print-clause-ids nil)
-                               )
-                              (acl2::prove toprove (acl2::make-pspv (acl2::ens state) (w state) state) (acl2::default-hints (w state)) (acl2::ens state) (w state) "thm..." state)))
-       ((mv ? prove-okp state) (mv erp (if erp (cadr trval) t) state))
-       )
-      ; (prog2$ (cw "~%Attempted proof of ~x0: erp ~x1, trivial ~x2~|" toprove erp trval)
-      (mv prove-okp state)
-      ; )
-      )
-  )
-
-(defun runit (terms state cnt total)
-  (declare (xargs :mode :program
-                  :stobjs (state)))
-  (if (endp terms) (mv nil nil nil state)
-      (b* ((term (car terms))
-           ((mv proved no-ce has-ce state) (runit (cdr terms) state (1+ cnt) total))
-           ; ((mv ? no-ce-p state) (acl2s::test?-fn term nil nil state))
-           ((mv prove-okp state) (if t (proveit term state) (mv nil state)))
-           (proved1 (if prove-okp (cons term proved) proved))
-           (no-ce1 (if nil (cons term no-ce) no-ce))
-           (has-ce1 (if nil has-ce (cons term has-ce))))
+  (if (endp terms) (mv nil state)
+      (b* ((conj (car terms))
+           ((mv proved-list state) (test-conjs (cdr terms) state (1+ cnt) total))
+           ((mv provedp proved-thm state) (tryprove-simplest-conj-top conj state))
+           (proved-list1 (if provedp (cons proved-thm proved-list) proved-list)))
           (prog2$ (if (= 0 (mod (- total cnt) 10))
-                      (cw "~x0/~x1...~%" (- total cnt) total)
-                      nil)
-                  (mv proved1 no-ce1 has-ce1 state)))))
+                      (cw "~x0/~x1...~%" (- total cnt) total) nil)
+                  (mv proved-list1 state)))))
 
-(defmacro genM (fns size)
-  `(b* ((left (ceiling ,size 2))
-        (right (- ,size left))
-        (terms (make-rw-conjectures (fn-datas ,fns state) left right))
-        ((mv proved ?no-ce ?has-ce state) (prog2$
-                                           (cw "~%Testing ~x0 conjectures...~%" (length terms))
-                                           (runit terms state 0 (length terms))))
+(defmacro genM (fns left-size)
+  `(b* ((terms (make-rw-conjectures (fn-datas ,fns state) ,left-size ,left-size))
+        ((mv proved state) (prog2$ (cw "~%Testing ~x0 conjectures...~%" (length terms))
+                                   (test-conjs terms state 0 (length terms))))
         (num-proved (len proved))
         ((mv proved-pretty state) (prettify-term-list proved state)))
     (prog2$
      (prog2$ (cw "~%====================~%\
 Given the theory ~x0,\
-we generated ~x1 conjectures of bigsize ~x2 (left=~x3,right<=~x4).~%"
-                 ,fns (length terms) ,size left right)
+we generated ~x1 conjectures of size left=~x2, right<=~x2.~%"
+                 ,fns (length terms) ,left-size)
              (if (zerop num-proved)
                  (cw "~%Unfortunately, we failed to prove any conjecture true.~%")
                  (cw "We were able to prove ~x0 conjectures, namely:~%~y1~%"
@@ -590,17 +628,12 @@ we generated ~x1 conjectures of bigsize ~x2 (left=~x3,right<=~x4).~%"
   `(acl2::prove ,term (acl2::make-pspv (acl2::ens state) (w state) state) (acl2::default-hints (w state)) (acl2::ens state) (w state) "thm..." state))
 
 (make-termM '(equal rev2 len) 4)
-(genM '(rev2 len) 6)
+(genM '(rev2 len) 3)
 
-; (defthm my-len-of-rev (IMPLIES (AND (IF (TRUE-LISTP A)
-;                                         (TRUE-LISTP A)
-;                                         (STRINGP A)))
-;                                (EQUAL (LEN (REVERSE A)) (LEN A)))
-;   :hints (("Goal"
-;            :in-theory (set-difference-theories
-;                        (current-theory :here)
-;                        nil)
-;            )))
+;; (defthm my-len-of-rev (IMPLIES (AND (IF (TRUE-LISTP A)
+;;                                         (TRUE-LISTP A)
+;;                                         (STRINGP A)))
+;;                                (EQUAL (LEN (REVERSE A)) (LEN A))))
 
 ;; (defmacro make-termM (fns size)
 ;;   `(with-output
