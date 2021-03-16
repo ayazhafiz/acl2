@@ -129,9 +129,7 @@
                        (cons head tail)
                        (cons head (list tail)))) ; wrap function calls
              (res (cons inst (reflow-head-with-rests st head (cdr rests)))))
-            ;(prog2$ (cw "~% reflowhead: head:~x0 tail:~x1 :: ~x2~%" head (car rests) res)
             res
-            ;)
             ))
   )
 
@@ -140,9 +138,7 @@
   (if (endp heads)
       nil
       (let* ((res (append (reflow-head-with-rests st (car heads) rests) (reflow-heads-with-rests st (cdr heads) rests))))
-            ;(prog2$ (cw "~% after reflows[heads: ~x0, tails: ~x1]: ~x2~%" heads rests res)
             res
-            ;)
             )))
 
 (defun enlist (lst)
@@ -180,9 +176,7 @@
             ; ((xor (endp head-terms) (endp tail-terms)) nil)
             (t (b* ((insts-for-headsize (reflow-heads-with-rests st head-terms tail-terms))
                     ((mv allrest st) (make-term--seq-map-over-head st (cdr heads) num-terms size)))
-                   ; (prog2$ (cw  "~%heads: ~x0    tails: ~x1     instances: ~x2~|" head-terms tail-terms insts-for-headsize)
                    (mv (append insts-for-headsize allrest) st)
-                   ;)
                    ))))))
  
  ;; Creates a list of sequences of terms, list(S), where the number of terms in
@@ -491,21 +485,21 @@
                     (thm-of-lrconj x))
 
 
-;; Given a term, put it in a form a user would want to see, since
-;; originally we generated these somewhat haphazardly.
-(define prettify-term-list ((terms pseudo-term-listp) state)
+;; Given a list of LR conjectures, put them in a form a user would want to see,
+;; since originally we generated these somewhat haphazardly.
+(define pretty-thms-of-lrconj-list (lrconjs state)
   :mode :program
   :stobjs state
-  (if (endp terms)
+  (if (endp lrconjs)
       (mv nil state)
-      (b* (((mv rst state) (prettify-term-list (cdr terms) state))
-           ((mv ? desugared state) (acl2::translate (car terms) t nil t "thm..." (w state) state))
+      (b* (((mv rst state) (pretty-thms-of-lrconj-list (cdr lrconjs) state))
+           ((mv ? desugared state) (acl2::translate (thm-of-lrconj (car lrconjs)) t nil t "thm..." (w state) state))
            (sugared (acl2::untranslate desugared t (w state))))
           (mv (cons sugared rst) state))))
 
 ;}}}
 
-;;;;; THM PROVING AND HYPOTHESIS PRUNING {{{
+;;;;; THM PROVING {{{
 
 (defun tryprove (term state)
   (declare (xargs :mode :program
@@ -519,41 +513,43 @@
                               (acl2::prove toprove (acl2::make-pspv (acl2::ens state) (w state) state) (acl2::default-hints (w state)) (acl2::ens state) (w state) "thm..." state)))
        ((mv ? prove-okp state) (mv erp (if erp (cadr trval) t) state))
        )
-      ; (prog2$ (cw "~%Attempted proof of ~x0: erp ~x1, trivial ~x2~|" toprove erp trval)
       (mv prove-okp state)
-      ; )
       ))
 
+; }}}
+
+;;;;; HYPOTHESIS PRUNING {{{
+
 (mutual-recursion
-  (defun tryprove-pruning-hyps (l r incl-hyps rest-hyps state)
-    (declare (xargs :mode :program :stobjs state))
-    (if (endp rest-hyps)
-      (mv nil nil state)
-      (b* (((mv other-provedp best-other state) (tryprove-pruning-hyps l r (append incl-hyps (list (car rest-hyps))) (cdr rest-hyps) state))
-           (cand-hyps (append incl-hyps (cdr rest-hyps)))
-           ((mv cand-provedp best-from-cand-hyps state) (tryprove-simplest-conj l r cand-hyps state)))
-          (cond
+ (defun tryprove-pruning-hyps (l r incl-hyps rest-hyps state)
+   (declare (xargs :mode :program :stobjs state))
+   (if (endp rest-hyps)
+       (mv nil nil state)
+       (b* (((mv other-provedp best-other state) (tryprove-pruning-hyps l r (append incl-hyps (list (car rest-hyps))) (cdr rest-hyps) state))
+            (cand-hyps (append incl-hyps (cdr rest-hyps)))
+            ((mv cand-provedp best-from-cand-hyps state) (tryprove-simplest-conj l r cand-hyps state)))
+           (cond
             ((and cand-provedp other-provedp)
              (mv t (if (< (len best-other) (len best-from-cand-hyps)) best-other best-from-cand-hyps) state))
             (cand-provedp (mv t best-from-cand-hyps state))
             (other-provedp (mv t best-other state))
             (t (mv nil nil state)))
-          )
-      ))
-  
-  (defun tryprove-simplest-conj (l r hyps state)
-    (declare (xargs :mode :program :stobjs state))
-    (b* (((mv provedp state) (tryprove (thm-of-lrconj (pack-lrconj l r hyps)) state)))
-        (if (not provedp)
-          (mv nil nil state)
-          ; We were able to prove the conjecture. Can we prove it with less hypotheses?
-          (b* (((mv provedwithless-p less-hyps state) (tryprove-pruning-hyps l r nil hyps state)))
-              (if provedwithless-p
-                (mv t less-hyps state) ; yes!
-                (mv t hyps state)) ; no, just use what we started with
-              )
-          )))
-)
+           )
+       ))
+ 
+ (defun tryprove-simplest-conj (l r hyps state)
+   (declare (xargs :mode :program :stobjs state))
+   (b* (((mv provedp state) (tryprove (thm-of-lrconj (pack-lrconj l r hyps)) state)))
+       (if (not provedp)
+           (mv nil nil state)
+           ; We were able to prove the conjecture. Can we prove it with less hypotheses?
+           (b* (((mv provedwithless-p less-hyps state) (tryprove-pruning-hyps l r nil hyps state)))
+               (if provedwithless-p
+                   (mv t less-hyps state) ; yes!
+                   (mv t hyps state)) ; no, just use what we started with
+               )
+           )))
+ )
 
 (define tryprove-simplest-conj-top ((lrconj lrconjp) state)
   :mode :program
@@ -561,29 +557,102 @@
   (b* (((mv l r hyps) (unpack-lrconj lrconj))
        ((mv provedp besthyps state) (tryprove-simplest-conj l r hyps state))
        (conj (pack-lrconj l r besthyps)))
-      (mv provedp (thm-of-lrconj conj) state)))
+      (mv provedp conj state)))
 
 ;}}}
 
+;;;;; THM PRUNING {{{
+
+; Returns whether a type hypothesis `hyp` is unsatisfiable. For example,
+; "(LISTP (LEN A))" is never satisfiable, regardless of the value of `A`. Given
+; a term "(TYPEP X)", we determine what the type set of `X` must be supposing
+; "(TYPEP X)" is true. If the type set is empty, the hypothesis is never
+; satisfiable.
+; (define is-type-hypothesis-unsat ((hyp pseudo-termp) state)
+;   :mode :program
+;   :stobjs state
+;   (b* (((mv ts ?ttree) (acl2::type-set-implied-by-term (cadr hyp) nil hyp (acl2::ens state) (acl2::w state) nil)))
+;       (= acl2::*ts-empty* ts)))
+;
+; ; Heuristic to determine is a term is a type hypothesis
+; (define type-hypothesisp ((term pseudo-termp))
+;   :mode :program
+;   (and (pseudo-termp term)
+;        (= 2 (len term))
+;        (symbolp (car term))
+;        (eql #\P (char (reverse (string (car term))) 0))))
+;
+; (define is-hypothesis-unsat1 ((hyp pseudo-termp) state isfirst)
+;   :mode :program
+;   :stobjs state
+;   (if (atom hyp)
+;     nil
+;     (b* ((is-unsat (if isfirst
+;                      (and (type-hypothesisp hyp) (is-type-hypothesis-unsat hyp state))
+;                      nil)))
+;         (or is-unsat
+;             ; check current subterm we're at, in case it's nested
+;             (is-hypothesis-unsat1 (car hyp) state t)
+;             ; check the rest of the term
+;             (is-hypothesis-unsat1 (cdr hyp) state nil))
+;         )))
+
+; Determines if a variable is unsatisfiable in a hypothesis.
+(define is-var-unsat-in-hypothesis ((var symbolp) (hyp pseudo-termp) state)
+  :mode :program :stobjs state
+  (b* (((mv ts ?ttree) (acl2::type-set-implied-by-term var nil hyp (acl2::ens state) (acl2::w state) nil)))
+      (= acl2::*ts-empty* ts)))
+
+(define any-vars-unsat-in-hypothesis ((vars symbol-listp) (hypothesis pseudo-termp) state)
+  :mode :program :stobjs state
+  (and (consp vars)
+       (or (is-var-unsat-in-hypothesis (car vars) hypothesis state)
+           (any-vars-unsat-in-hypothesis (cdr vars) hypothesis state))))
+
+; A heuristic to decide whether this theorem should be pruned from inclusion as
+; a desirable lemma to include in the theory. The reasons for this include
+;   - Unsatisfiable hypotheses, making the theorem vacuous
+;   - TODO: "trivial" conclusion - what does this mean?
+(define should-prune-thm ((thm lrconjp) (st st-p) state)
+  :mode :program
+  :stobjs state
+  (b* (((mv l ?r hyps) (unpack-lrconj thm))
+       ((mv ? hypothesis state) (acl2::translate (cons 'AND hyps) t nil t "thm..." (w state) state))
+       (vars (collect-vars st l)))
+      (mv (and (len hyps)
+               (any-vars-unsat-in-hypothesis vars hypothesis state))
+          state)))
+
+(define prune-thms (thms (st st-p) state)
+  :mode :program
+  :stobjs state
+  (if (endp thms)
+      (mv nil state)
+      (b* (((mv pruneit state) (should-prune-thm (car thms) st state))
+           ((mv keepthms state) (prune-thms (cdr thms) st state)))
+          (if pruneit
+              (mv keepthms state)
+              (mv (cons (car thms) keepthms) state)))))
+
+; }}}
+
 ;;;;; MAIN DRIVERS
 
-(defun make-rw-conjectures (fn-data left right)
+(defun make-rw-conjectures (st left right)
   (declare (xargs :mode :program))
-  (b* ((st (st-new fn-data left))
-       ; (2) create holed terms
+  (b* (
+       ; Create holed terms
        ((mv lterms-holed st) (make-term st left))
        ((mv rterms-holed st) (holed-terms-of-sizes st (list-of-n right)))
-       ; (3) instantiate lterms with concrete vars
+       ; Instantiate lterms with concrete vars
        (lterms (reify-term-list st lterms-holed))
-       ; (4) for each lterm, instantiate one of each rterm with concrete
+       ; For each lterm, instantiate one of each rterm with concrete
        ; variables from the set of variables in the lterm. Now we have pairs
        ; of concrete terms (left, right) to be used in a theorem.
        (lr-pairs (pair-lterms-holed-rterms st lterms rterms-holed))
-       ; (5) for each lrpair, generate a lrconj with hypotheses collected from
+       ; For each lrpair, generate a lrconj with hypotheses collected from
        ; the l/r terms.
        (lr-conjs (lrterm2conj-list st lr-pairs)))
-       ; (6) collapse lrconjs into a theorem
-       ; (thms (thm-of-lrconj-list lr-conjs)))
       lr-conjs))
 
 (defmacro fn-dataM (fns)
@@ -592,8 +661,8 @@
 (defmacro single-termM (fns size)
   `(make-term (fn-dataM ,fns) ,size))
 
-(defmacro make-termM (fns size)
-  `(make-rw-conjectures (fn-dataM ,fns) (ceiling ,size 2) (- ,size (ceiling ,size 2))))
+(defmacro make-termM (fns left right)
+  `(make-rw-conjectures (fn-dataM ,fns) ,left ,right))
 
 (defun test-conjs (terms state cnt total)
   (declare (xargs :mode :program
@@ -601,18 +670,21 @@
   (if (endp terms) (mv nil state)
       (b* ((conj (car terms))
            ((mv proved-list state) (test-conjs (cdr terms) state (1+ cnt) total))
-           ((mv provedp proved-thm state) (tryprove-simplest-conj-top conj state))
-           (proved-list1 (if provedp (cons proved-thm proved-list) proved-list)))
+           ((mv provedp proved-conj state) (tryprove-simplest-conj-top conj state))
+           (proved-list1 (if provedp (cons proved-conj proved-list) proved-list)))
           (prog2$ (if (= 0 (mod (- total cnt) 10))
                       (cw "~x0/~x1...~%" (- total cnt) total) nil)
                   (mv proved-list1 state)))))
 
 (defmacro genM (fns left-size)
-  `(b* ((terms (make-rw-conjectures (fn-datas ,fns state) ,left-size ,left-size))
-        ((mv proved state) (prog2$ (cw "~%Testing ~x0 conjectures...~%" (length terms))
-                                   (test-conjs terms state 0 (length terms))))
-        (num-proved (len proved))
-        ((mv proved-pretty state) (prettify-term-list proved state)))
+  `(b* ((st (st-new (fn-datas ,fns state) ,left-size))
+        (terms (make-rw-conjectures st ,left-size ,left-size))
+        ((mv proved-thms state) (prog2$ (cw "~%Testing ~x0 conjectures...~%" (length terms))
+                                        (test-conjs terms state 0 (length terms))))
+        (num-proved (len proved-thms))
+        ((mv useful-thms state) (prune-thms proved-thms st state))
+        (num-useful (len useful-thms))
+        ((mv final-thms-pretty state) (pretty-thms-of-lrconj-list useful-thms state)))
     (prog2$
      (prog2$ (cw "~%====================~%\
 Given the theory ~x0,\
@@ -620,14 +692,14 @@ we generated ~x1 conjectures of size left=~x2, right<=~x2.~%"
                  ,fns (length terms) ,left-size)
              (if (zerop num-proved)
                  (cw "~%Unfortunately, we failed to prove any conjecture true.~%")
-                 (cw "We were able to prove ~x0 conjectures, namely:~%~y1~%"
-                     num-proved proved-pretty)))
+                 (cw "We were able to prove ~x0 conjectures. Of these, we deem ~x1 useful, namely:~%~y2~%"
+                     num-proved num-useful final-thms-pretty)))
      (mv num-proved state))))
 
 (defmacro prove-wrapper (term)
   `(acl2::prove ,term (acl2::make-pspv (acl2::ens state) (w state) state) (acl2::default-hints (w state)) (acl2::ens state) (w state) "thm..." state))
 
-(make-termM '(equal rev2 len) 4)
+(make-termM '(equal rev2 len) 3 3)
 (genM '(rev2 len) 3)
 
 ;; (defthm my-len-of-rev (IMPLIES (AND (IF (TRUE-LISTP A)
@@ -656,15 +728,19 @@ we generated ~x1 conjectures of size left=~x2, right<=~x2.~%"
 ; TODO
 ; - How can we better deal with the hypotheses we are introducing?
 ;   So far:
-;   - pull out function guards as hyps
+;   D pull out function guards as hyps
 ;   What else can we do?
 ;   - "generate" hypotheses
 ;     - this seems futile - where would we generate them from
 ;   - perhaps, pull out failed subgoals as new, additional hypotheses for the
 ;     conjecture
 ; - Hypothesis pruning
-;   - when a theorem is proven, attempt to remove hypotheses so long as we have
+;   D when a theorem is proven, attempt to remove hypotheses so long as we have
 ;     that the theorem continues to hold
+; - Theorem pruning
+;   D Remove theorems whose hypotheses are unsatisfiable via their types
+;   - Remove theorems whose hypotheses are unsatisfiable in general - via
+;     SMTlink?
 ; TODO backburner
 ; * figure out what's going on with cgen with the 3-fn gen (incl. len) vs 2-fn.
 ;   Maybe we can just get rid of cgen?
