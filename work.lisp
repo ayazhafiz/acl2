@@ -662,7 +662,7 @@
   `(make-term (fn-dataM ,fns) ,size))
 
 (defmacro make-termM (fns left right)
-  `(make-rw-conjectures (fn-dataM ,fns) ,left ,right))
+  `(make-rw-conjectures (st-new (fn-dataM ,fns) ,left) ,left ,right))
 
 (defun test-conjs (terms state cnt total)
   (declare (xargs :mode :program
@@ -739,6 +739,18 @@ we generated ~x1 conjectures of size left=~x2, right<=~x2.~%"
 ;     that the theorem continues to hold
 ; - Theorem pruning
 ;   D Remove theorems whose hypotheses are unsatisfiable via their types
+;     - MUST DO: BEFORE TRYING TO PROVE THEOREMS!!!
+;       Doing this ahead of time shows us terms that are inconsistent and are
+;       pointless to try to explore before we vacuously prove them and then try
+;       to generalize. For example consider
+; ACL2 !>(type-set-implied-by-term 'A nil '(IF (NATP A)(IF (LISTP A)(TRUE-LISTP (BINARY-APPEND A A)) 'NIL) 'NIL) (ens state) (w state) nil)
+; (0 ((LEMMA (:COMPOUND-RECOGNIZER NATP-COMPOUND-RECOGNIZER))))
+; ACL2 !>(type-set-implied-by-term 'A nil '(IF (NATP A)(IF T (TRUE-LISTP (BINARY-APPEND A A)) 'NIL) 'NIL) (ens state) (w state) nil)
+; (7 ((LEMMA (:COMPOUND-RECOGNIZER NATP-COMPOUND-RECOGNIZER))))
+;       The later case consists hyps of a unsatisfiable conjecture that we were
+;       then able to generalize, but it is still unsatisfiable! But we lost
+;       enough info and aren't able to prove thhat anymore. So we should just
+;       prune it before trying to prove.
 ;   - Remove theorems whose hypotheses are unsatisfiable in general - via
 ;     SMTlink?
 ; TODO backburner
