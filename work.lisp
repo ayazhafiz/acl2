@@ -499,68 +499,6 @@
 
 ;}}}
 
-;;;;; THM PROVING {{{
-
-(defun tryprove (term state)
-  (declare (xargs :mode :program
-                  :stobjs (state)))
-  ; TODO capture + handle error
-  (b* (((mv ? toprove state) (acl2::translate term t nil t "thm..." (w state) state))
-       ((mv erp trval state) (acl2::state-global-let*
-                              ((acl2::inhibit-output-lst *valid-output-names*)
-                               (acl2::print-clause-ids nil)
-                               )
-                              (acl2::prove toprove (acl2::make-pspv (acl2::ens state) (w state) state) (acl2::default-hints (w state)) (acl2::ens state) (w state) "thm..." state)))
-       ((mv ? prove-okp state) (mv erp (if erp (cadr trval) t) state))
-       )
-      (mv prove-okp state)
-      ))
-
-; }}}
-
-;;;;; HYPOTHESIS PRUNING {{{
-
-(mutual-recursion
- (defun tryprove-pruning-hyps (l r incl-hyps rest-hyps state)
-   (declare (xargs :mode :program :stobjs state))
-   (if (endp rest-hyps)
-       (mv nil nil state)
-       (b* (((mv other-provedp best-other state) (tryprove-pruning-hyps l r (append incl-hyps (list (car rest-hyps))) (cdr rest-hyps) state))
-            (cand-hyps (append incl-hyps (cdr rest-hyps)))
-            ((mv cand-provedp best-from-cand-hyps state) (tryprove-simplest-conj l r cand-hyps state)))
-           (cond
-            ((and cand-provedp other-provedp)
-             (mv t (if (< (len best-other) (len best-from-cand-hyps)) best-other best-from-cand-hyps) state))
-            (cand-provedp (mv t best-from-cand-hyps state))
-            (other-provedp (mv t best-other state))
-            (t (mv nil nil state)))
-           )
-       ))
- 
- (defun tryprove-simplest-conj (l r hyps state)
-   (declare (xargs :mode :program :stobjs state))
-   (b* (((mv provedp state) (tryprove (thm-of-lrconj (pack-lrconj l r hyps)) state)))
-       (if (not provedp)
-           (mv nil nil state)
-           ; We were able to prove the conjecture. Can we prove it with less hypotheses?
-           (b* (((mv provedwithless-p less-hyps state) (tryprove-pruning-hyps l r nil hyps state)))
-               (if provedwithless-p
-                   (mv t less-hyps state) ; yes!
-                   (mv t hyps state)) ; no, just use what we started with
-               )
-           )))
- )
-
-(define tryprove-simplest-conj-top ((lrconj lrconjp) state)
-  :mode :program
-  :stobjs state
-  (b* (((mv l r hyps) (unpack-lrconj lrconj))
-       ((mv provedp besthyps state) (tryprove-simplest-conj l r hyps state))
-       (conj (pack-lrconj l r besthyps)))
-      (mv provedp conj state)))
-
-;}}}
-
 ;;;;; THM PRUNING {{{
 
 ; Returns whether a type hypothesis `hyp` is unsatisfiable. For example,
@@ -636,6 +574,68 @@
 
 ; }}}
 
+;;;;; THM PROVING {{{
+
+(defun tryprove (term state)
+  (declare (xargs :mode :program
+                  :stobjs (state)))
+  ; TODO capture + handle error
+  (b* (((mv ? toprove state) (acl2::translate term t nil t "thm..." (w state) state))
+       ((mv erp trval state) (acl2::state-global-let*
+                              ((acl2::inhibit-output-lst *valid-output-names*)
+                               (acl2::print-clause-ids nil)
+                               )
+                              (acl2::prove toprove (acl2::make-pspv (acl2::ens state) (w state) state) (acl2::default-hints (w state)) (acl2::ens state) (w state) "thm..." state)))
+       ((mv ? prove-okp state) (mv erp (if erp (cadr trval) t) state))
+       )
+      (mv prove-okp state)
+      ))
+
+; }}}
+
+;;;;; HYPOTHESIS PRUNING {{{
+
+(mutual-recursion
+ (defun tryprove-pruning-hyps (l r incl-hyps rest-hyps state)
+   (declare (xargs :mode :program :stobjs state))
+   (if (endp rest-hyps)
+       (mv nil nil state)
+       (b* (((mv other-provedp best-other state) (tryprove-pruning-hyps l r (append incl-hyps (list (car rest-hyps))) (cdr rest-hyps) state))
+            (cand-hyps (append incl-hyps (cdr rest-hyps)))
+            ((mv cand-provedp best-from-cand-hyps state) (tryprove-simplest-conj l r cand-hyps state)))
+           (cond
+            ((and cand-provedp other-provedp)
+             (mv t (if (< (len best-other) (len best-from-cand-hyps)) best-other best-from-cand-hyps) state))
+            (cand-provedp (mv t best-from-cand-hyps state))
+            (other-provedp (mv t best-other state))
+            (t (mv nil nil state)))
+           )
+       ))
+ 
+ (defun tryprove-simplest-conj (l r hyps state)
+   (declare (xargs :mode :program :stobjs state))
+   (b* (((mv provedp state) (tryprove (thm-of-lrconj (pack-lrconj l r hyps)) state)))
+       (if (not provedp)
+           (mv nil nil state)
+           ; We were able to prove the conjecture. Can we prove it with less hypotheses?
+           (b* (((mv provedwithless-p less-hyps state) (tryprove-pruning-hyps l r nil hyps state)))
+               (if provedwithless-p
+                   (mv t less-hyps state) ; yes!
+                   (mv t hyps state)) ; no, just use what we started with
+               )
+           )))
+ )
+
+(define tryprove-simplest-conj-top ((lrconj lrconjp) state)
+  :mode :program
+  :stobjs state
+  (b* (((mv l r hyps) (unpack-lrconj lrconj))
+       ((mv provedp besthyps state) (tryprove-simplest-conj l r hyps state))
+       (conj (pack-lrconj l r besthyps)))
+      (mv provedp conj state)))
+
+;}}}
+
 ;;;;; MAIN DRIVERS
 
 (defun make-rw-conjectures (st left right)
@@ -664,43 +664,52 @@
 (defmacro make-termM (fns left right)
   `(make-rw-conjectures (st-new (fn-dataM ,fns) ,left) ,left ,right))
 
-(defun test-conjs (terms state cnt total)
+(defun validate-conjs (terms state cnt total)
   (declare (xargs :mode :program
                   :stobjs (state)))
   (if (endp terms) (mv nil state)
       (b* ((conj (car terms))
-           ((mv proved-list state) (test-conjs (cdr terms) state (1+ cnt) total))
+           ((mv proved-list state) (validate-conjs (cdr terms) state (1+ cnt) total))
            ((mv provedp proved-conj state) (tryprove-simplest-conj-top conj state))
            (proved-list1 (if provedp (cons proved-conj proved-list) proved-list)))
           (prog2$ (if (= 0 (mod (- total cnt) 10))
                       (cw "~x0/~x1...~%" (- total cnt) total) nil)
                   (mv proved-list1 state)))))
 
-(defmacro genM (fns left-size)
-  `(b* ((st (st-new (fn-datas ,fns state) ,left-size))
-        (terms (make-rw-conjectures st ,left-size ,left-size))
-        ((mv proved-thms state) (prog2$ (cw "~%Testing ~x0 conjectures...~%" (length terms))
-                                        (test-conjs terms state 0 (length terms))))
+(defmacro genM (fns left-size &rest opts)
+  `(b* ((show-useful-conjs (aget 'show-useful-conjectures ,opts))
+        (st (st-new (fn-datas ,fns state) ,left-size))
+        (conjs (make-rw-conjectures st ,left-size ,left-size))
+        ((mv useful-conjs state) (prune-thms conjs st state))
+        (num-useful (length useful-conjs))
+        ((mv proved-thms state) (prog2$ (cw "~%Validating ~x0 conjectures...~%" num-useful)
+                                        (validate-conjs useful-conjs state 0 num-useful)))
         (num-proved (len proved-thms))
-        ((mv useful-thms state) (prune-thms proved-thms st state))
-        (num-useful (len useful-thms))
-        ((mv final-thms-pretty state) (pretty-thms-of-lrconj-list useful-thms state)))
+        ((mv final-thms-pretty state) (pretty-thms-of-lrconj-list proved-thms state)))
     (prog2$
      (prog2$ (cw "~%====================~%\
 Given the theory ~x0,\
-we generated ~x1 conjectures of size left=~x2, right<=~x2.~%"
-                 ,fns (length terms) ,left-size)
+we generated ~x1 conjectures of size left=~x2, right<=~x2.\
+Of these, we deemed ~x3 useful~s4~%"
+                 ,fns (length conjs) ,left-size num-useful
+                 (if show-useful-conjs (fms-to-string ", namely:~%~y0" (list (cons #\0 (thm-of-lrconj-list useful-conjs)))) "."))
              (if (zerop num-proved)
-                 (cw "~%Unfortunately, we failed to prove any conjecture true.~%")
-                 (cw "We were able to prove ~x0 conjectures. Of these, we deem ~x1 useful, namely:~%~y2~%"
-                     num-proved num-useful final-thms-pretty)))
+                 (cw "~%Unfortunately, we failed to prove any of them true.~%")
+                 (cw "We were able to prove ~x0, namely:~%~y1~%"
+                     num-proved final-thms-pretty)))
      (mv num-proved state))))
+(defmacro translate** (term)
+  `(acl2::translate ,term t nil t "thm..." (w state) state))
 
-(defmacro prove-wrapper (term)
+(defmacro prove** (term)
   `(acl2::prove ,term (acl2::make-pspv (acl2::ens state) (w state) state) (acl2::default-hints (w state)) (acl2::ens state) (w state) "thm..." state))
 
+(defmacro tyinfer** (var term)
+  `(type-set-implied-by-term ,var nil ,term (ens state) (w state) nil))
+
 (make-termM '(equal rev2 len) 3 3)
-(genM '(rev2 len) 3)
+(genM '(rev2 len) 3
+      acons 'show-useful-conjectures t nil)
 
 ;; (defthm my-len-of-rev (IMPLIES (AND (IF (TRUE-LISTP A)
 ;;                                         (TRUE-LISTP A)
@@ -739,18 +748,6 @@ we generated ~x1 conjectures of size left=~x2, right<=~x2.~%"
 ;     that the theorem continues to hold
 ; - Theorem pruning
 ;   D Remove theorems whose hypotheses are unsatisfiable via their types
-;     - MUST DO: BEFORE TRYING TO PROVE THEOREMS!!!
-;       Doing this ahead of time shows us terms that are inconsistent and are
-;       pointless to try to explore before we vacuously prove them and then try
-;       to generalize. For example consider
-; ACL2 !>(type-set-implied-by-term 'A nil '(IF (NATP A)(IF (LISTP A)(TRUE-LISTP (BINARY-APPEND A A)) 'NIL) 'NIL) (ens state) (w state) nil)
-; (0 ((LEMMA (:COMPOUND-RECOGNIZER NATP-COMPOUND-RECOGNIZER))))
-; ACL2 !>(type-set-implied-by-term 'A nil '(IF (NATP A)(IF T (TRUE-LISTP (BINARY-APPEND A A)) 'NIL) 'NIL) (ens state) (w state) nil)
-; (7 ((LEMMA (:COMPOUND-RECOGNIZER NATP-COMPOUND-RECOGNIZER))))
-;       The later case consists hyps of a unsatisfiable conjecture that we were
-;       then able to generalize, but it is still unsatisfiable! But we lost
-;       enough info and aren't able to prove thhat anymore. So we should just
-;       prune it before trying to prove.
 ;   - Remove theorems whose hypotheses are unsatisfiable in general - via
 ;     SMTlink?
 ; TODO backburner
