@@ -499,6 +499,25 @@
 
 ;}}}
 
+;;;;; THM PROVING {{{
+
+(defun tryprove (term state)
+  (declare (xargs :mode :program
+                  :stobjs (state)))
+  ; TODO capture + handle error
+  (b* (((mv ? toprove state) (acl2::translate term t nil t "thm..." (w state) state))
+       ((mv erp trval state) (acl2::state-global-let*
+                              ((acl2::inhibit-output-lst *valid-output-names*)
+                               (acl2::print-clause-ids nil)
+                               )
+                              (acl2::prove toprove (acl2::make-pspv (acl2::ens state) (w state) state) (acl2::default-hints (w state)) (acl2::ens state) (w state) "thm..." state)))
+       ((mv ? prove-okp state) (mv erp (if erp (cadr trval) t) state))
+       )
+      (mv prove-okp state)
+      ))
+
+; }}}
+
 ;;;;; THM PRUNING {{{
 
 ; Returns whether a type hypothesis `hyp` is unsatisfiable. For example,
@@ -535,17 +554,33 @@
 ;             (is-hypothesis-unsat1 (cdr hyp) state nil))
 ;         )))
 
-; Determines if a variable is unsatisfiable in a hypothesis.
-(define is-var-unsat-in-hypothesis ((var symbolp) (hyp pseudo-termp) state)
+; Determines if a variable is unsatisfiable in a hypothesis via its type set.
+; A variable is unsatisfiable if its deduced type set is empty.
+(define is-var-ty-unsat-in-hypothesis ((var symbolp) (hyp pseudo-termp) state)
   :mode :program :stobjs state
   (b* (((mv ts ?ttree) (acl2::type-set-implied-by-term var nil hyp (acl2::ens state) (acl2::w state) nil)))
       (= acl2::*ts-empty* ts)))
 
-(define any-vars-unsat-in-hypothesis ((vars symbol-listp) (hypothesis pseudo-termp) state)
+; Determines if any variables in a hypothesis are unsatisfiable by way of their
+; type sets being empty.
+(define any-vars-ty-unsat-in-hypothesis ((vars symbol-listp) (hypothesis pseudo-termp) state)
   :mode :program :stobjs state
   (and (consp vars)
-       (or (is-var-unsat-in-hypothesis (car vars) hypothesis state)
-           (any-vars-unsat-in-hypothesis (cdr vars) hypothesis state))))
+       (or (is-var-ty-unsat-in-hypothesis (car vars) hypothesis state)
+           (any-vars-ty-unsat-in-hypothesis (cdr vars) hypothesis state))))
+
+; Determines whether it can be proved that a hypothesis is unsatisfiable.
+; If -A is valid, it must be the case that A is unsatisfiable. That is the
+; approach we take here.
+(define is-hyp-provable-unsatisfiable ((hypothesis pseudo-termp) state)
+  :mode :program :stobjs state
+  (b* (((mv unsatp state) (tryprove `(NOT ,hypothesis) state)))
+      (mv unsatp state)))
+
+(define hypothesis-unsatisfiable ((hypothesis pseudo-termp) (vars symbol-listp) state)
+  :mode :program :stobjs state
+  (if (any-vars-ty-unsat-in-hypothesis vars hypothesis state) (mv t state)
+      (is-hyp-provable-unsatisfiable hypothesis state)))
 
 ; A heuristic to decide whether this theorem should be pruned from inclusion as
 ; a desirable lemma to include in the theory. The reasons for this include
@@ -556,10 +591,12 @@
   :stobjs state
   (b* (((mv l ?r hyps) (unpack-lrconj thm))
        ((mv ? hypothesis state) (acl2::translate (cons 'AND hyps) t nil t "thm..." (w state) state))
-       (vars (collect-vars st l)))
-      (mv (and (len hyps)
-               (any-vars-unsat-in-hypothesis vars hypothesis state))
-          state)))
+       (vars (collect-vars st l))
+       ((mv should-prune state)
+         (cond
+           ((zerop (len hyps)) (mv nil state))
+           (t (hypothesis-unsatisfiable hypothesis vars state)))))
+      (mv should-prune state)))
 
 (define prune-thms (thms (st st-p) state)
   :mode :program
@@ -572,24 +609,32 @@
               (mv keepthms state)
               (mv (cons (car thms) keepthms) state)))))
 
-; }}}
-
-;;;;; THM PROVING {{{
-
-(defun tryprove (term state)
-  (declare (xargs :mode :program
-                  :stobjs (state)))
-  ; TODO capture + handle error
-  (b* (((mv ? toprove state) (acl2::translate term t nil t "thm..." (w state) state))
-       ((mv erp trval state) (acl2::state-global-let*
-                              ((acl2::inhibit-output-lst *valid-output-names*)
-                               (acl2::print-clause-ids nil)
-                               )
-                              (acl2::prove toprove (acl2::make-pspv (acl2::ens state) (w state) state) (acl2::default-hints (w state)) (acl2::ens state) (w state) "thm..." state)))
-       ((mv ? prove-okp state) (mv erp (if erp (cadr trval) t) state))
-       )
-      (mv prove-okp state)
-      ))
+; Prunes theorems in an attempt to satisfy intuitions about what "nice" theorems
+; look like on the front-end.
+; For example, the theorem
+;   (EQUAL (BINARY-APPEND A (BINARY-APPEND A A) (BINARY-APPEND (BINARY-APPEND A A) A))
+; may be useful and "go somewhere", but its front-end sugaring is
+;   (EQUAL (APPEND A A A) (APPEND (APPEND A A) A))
+; which is not a very nice-appearing theorem, as the LHS is smaller than the
+; RHS. Indeed, intuition would suggest this theorem would not be useful. To this
+; end, we elide those theorems where the left hand side is not well-pre-ordered
+; relative to the right hand side.
+;
+; References:
+;   https://www.cs.utexas.edu/users/moore/acl2/manuals/current/manual/index-seo.php/ACL2____TERM-ORDER)
+(define posterior-prune-thms (thms state)
+  :mode :program :stobjs state
+  (if (endp thms)
+    nil
+    (b* ((keepthms (posterior-prune-thms (cdr thms) state))
+         ((mv l r ?hyps) (unpack-lrconj (car thms)))
+         (lsugared (acl2::untranslate l t (w state)))
+         (rsugared (acl2::untranslate r t (w state)))
+         (well-orderedp (term-order lsugared rsugared))
+         (pruneit (and well-orderedp)))
+        (if pruneit
+          keepthms
+          (cons (car thms) keepthms)))))
 
 ; }}}
 
@@ -673,7 +718,7 @@
            ((mv provedp proved-conj state) (tryprove-simplest-conj-top conj state))
            (proved-list1 (if provedp (cons proved-conj proved-list) proved-list)))
           (prog2$ (if (= 0 (mod (- total cnt) 10))
-                      (cw "~x0/~x1...~%" (- total cnt) total) nil)
+                      (cw "~s2~x0/~x1..." (- total cnt) total (coerce '(#\return) 'string)) nil)
                   (mv proved-list1 state)))))
 
 (defmacro genM (fns left-size &rest opts)
@@ -685,7 +730,9 @@
         ((mv proved-thms state) (prog2$ (cw "~%Validating ~x0 conjectures...~%" num-useful)
                                         (validate-conjs useful-conjs state 0 num-useful)))
         (num-proved (len proved-thms))
-        ((mv final-thms-pretty state) (pretty-thms-of-lrconj-list proved-thms state)))
+        (nice-thms (posterior-prune-thms proved-thms state))
+        (num-nice (len nice-thms))
+        ((mv final-thms-pretty state) (pretty-thms-of-lrconj-list nice-thms state)))
     (prog2$
      (prog2$ (cw "~%====================~%\
 Given the theory ~x0,\
@@ -695,9 +742,10 @@ Of these, we deemed ~x3 useful~s4~%"
                  (if show-useful-conjs (fms-to-string ", namely:~%~y0" (list (cons #\0 (thm-of-lrconj-list useful-conjs)))) "."))
              (if (zerop num-proved)
                  (cw "~%Unfortunately, we failed to prove any of them true.~%")
-                 (cw "We were able to prove ~x0, namely:~%~y1~%"
-                     num-proved final-thms-pretty)))
+                 (cw "We were able to prove ~x0. ~x1 of those appear nice, namely:~%~y2~%"
+                     num-proved num-nice final-thms-pretty)))
      (mv num-proved state))))
+
 (defmacro translate** (term)
   `(acl2::translate ,term t nil t "thm..." (w state) state))
 
