@@ -507,8 +507,8 @@
   (b* (; Enable all functions in the proof attempt
        (allfns (st-all-fns st))
        (hints (append
-                `(("Goal" :in-theory ,(cons 'enable allfns)))
-                (acl2::default-hints (w state))))
+               `(("Goal" :in-theory ,(cons 'enable allfns)))
+               (acl2::default-hints (w state))))
        ((mv ? hints state) (acl2::translate-hints "Goal" hints "Goal" (w state) state))
        ; ((mv ? hints state) (acl2::translate hints t nil t "hints..." (w state) state))
        ; TODO capture + handle error
@@ -600,9 +600,9 @@
        ((mv ? hypothesis state) (acl2::translate (cons 'AND hyps) t nil t "thm..." (w state) state))
        (vars (collect-vars st l))
        ((mv should-prune state)
-         (cond
-           ((zerop (len hyps)) (mv nil state))
-           (t (hypothesis-unsatisfiable hypothesis vars st state)))))
+        (cond
+         ((zerop (len hyps)) (mv nil state))
+         (t (hypothesis-unsatisfiable hypothesis vars st state)))))
       (mv should-prune state)))
 
 (define prune-thms (thms (st st-p) state)
@@ -632,16 +632,16 @@
 (define posterior-prune-thms (thms state)
   :mode :program :stobjs state
   (if (endp thms)
-    nil
-    (b* ((keepthms (posterior-prune-thms (cdr thms) state))
-         ((mv l r ?hyps) (unpack-lrconj (car thms)))
-         (lsugared (acl2::untranslate l t (w state)))
-         (rsugared (acl2::untranslate r t (w state)))
-         (well-orderedp (term-order lsugared rsugared))
-         (pruneit (and well-orderedp)))
-        (if pruneit
-          keepthms
-          (cons (car thms) keepthms)))))
+      nil
+      (b* ((keepthms (posterior-prune-thms (cdr thms) state))
+           ((mv l r ?hyps) (unpack-lrconj (car thms)))
+           (lsugared (acl2::untranslate l t (w state)))
+           (rsugared (acl2::untranslate r t (w state)))
+           (well-orderedp (term-order lsugared rsugared))
+           (pruneit (and well-orderedp)))
+          (if pruneit
+              keepthms
+              (cons (car thms) keepthms)))))
 
 ; }}}
 
@@ -758,8 +758,8 @@ Of these, we deemed ~x3 useful~s4~%"
 
 (defmacro prove** (term)
   `(b* (((mv ? hints state) (acl2::translate-hints "" (acl2::default-hints (w state)) nil (w state) state)))
-        (acl2::prove ,term (acl2::make-pspv (acl2::ens state) (w state) state) hints (acl2::ens state) (w state) "thm..." state)
-       ))
+    (acl2::prove ,term (acl2::make-pspv (acl2::ens state) (w state) state) hints (acl2::ens state) (w state) "thm..." state)
+    ))
 
 (defmacro tyinfer** (var term)
   `(type-set-implied-by-term ,var nil ,term (ens state) (w state) nil))
