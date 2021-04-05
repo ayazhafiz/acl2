@@ -501,16 +501,23 @@
 
 ;;;;; THM PROVING {{{
 
-(defun tryprove (term state)
+(defun tryprove (term st state)
   (declare (xargs :mode :program
                   :stobjs (state)))
-  ; TODO capture + handle error
-  (b* (((mv ? toprove state) (acl2::translate term t nil t "thm..." (w state) state))
+  (b* (; Enable all functions in the proof attempt
+       (allfns (st-all-fns st))
+       (hints (append
+                `(("Goal" :in-theory ,(cons 'enable allfns)))
+                (acl2::default-hints (w state))))
+       ((mv ? hints state) (acl2::translate-hints "Goal" hints "Goal" (w state) state))
+       ; ((mv ? hints state) (acl2::translate hints t nil t "hints..." (w state) state))
+       ; TODO capture + handle error
+       ((mv ? toprove state) (acl2::translate term t nil t "thm..." (w state) state))
        ((mv erp trval state) (acl2::state-global-let*
                               ((acl2::inhibit-output-lst *valid-output-names*)
                                (acl2::print-clause-ids nil)
                                )
-                              (acl2::prove toprove (acl2::make-pspv (acl2::ens state) (w state) state) (acl2::default-hints (w state)) (acl2::ens state) (w state) "thm..." state)))
+                              (acl2::prove toprove (acl2::make-pspv (acl2::ens state) (w state) state) hints (acl2::ens state) (w state) "thm..." state)))
        ((mv ? prove-okp state) (mv erp (if erp (cadr trval) t) state))
        )
       (mv prove-okp state)
@@ -572,15 +579,15 @@
 ; Determines whether it can be proved that a hypothesis is unsatisfiable.
 ; If -A is valid, it must be the case that A is unsatisfiable. That is the
 ; approach we take here.
-(define is-hyp-provable-unsatisfiable ((hypothesis pseudo-termp) state)
+(define is-hyp-provable-unsatisfiable ((hypothesis pseudo-termp) st state)
   :mode :program :stobjs state
-  (b* (((mv unsatp state) (tryprove `(NOT ,hypothesis) state)))
+  (b* (((mv unsatp state) (tryprove `(NOT ,hypothesis) st state)))
       (mv unsatp state)))
 
-(define hypothesis-unsatisfiable ((hypothesis pseudo-termp) (vars symbol-listp) state)
+(define hypothesis-unsatisfiable ((hypothesis pseudo-termp) (vars symbol-listp) st state)
   :mode :program :stobjs state
   (if (any-vars-ty-unsat-in-hypothesis vars hypothesis state) (mv t state)
-      (is-hyp-provable-unsatisfiable hypothesis state)))
+      (is-hyp-provable-unsatisfiable hypothesis st state)))
 
 ; A heuristic to decide whether this theorem should be pruned from inclusion as
 ; a desirable lemma to include in the theory. The reasons for this include
@@ -595,7 +602,7 @@
        ((mv should-prune state)
          (cond
            ((zerop (len hyps)) (mv nil state))
-           (t (hypothesis-unsatisfiable hypothesis vars state)))))
+           (t (hypothesis-unsatisfiable hypothesis vars st state)))))
       (mv should-prune state)))
 
 (define prune-thms (thms (st st-p) state)
@@ -641,13 +648,13 @@
 ;;;;; HYPOTHESIS PRUNING {{{
 
 (mutual-recursion
- (defun tryprove-pruning-hyps (l r incl-hyps rest-hyps state)
+ (defun tryprove-pruning-hyps (l r incl-hyps rest-hyps st state)
    (declare (xargs :mode :program :stobjs state))
    (if (endp rest-hyps)
        (mv nil nil state)
-       (b* (((mv other-provedp best-other state) (tryprove-pruning-hyps l r (append incl-hyps (list (car rest-hyps))) (cdr rest-hyps) state))
+       (b* (((mv other-provedp best-other state) (tryprove-pruning-hyps l r (append incl-hyps (list (car rest-hyps))) (cdr rest-hyps) st state))
             (cand-hyps (append incl-hyps (cdr rest-hyps)))
-            ((mv cand-provedp best-from-cand-hyps state) (tryprove-simplest-conj l r cand-hyps state)))
+            ((mv cand-provedp best-from-cand-hyps state) (tryprove-simplest-conj l r cand-hyps st state)))
            (cond
             ((and cand-provedp other-provedp)
              (mv t (if (< (len best-other) (len best-from-cand-hyps)) best-other best-from-cand-hyps) state))
@@ -657,13 +664,13 @@
            )
        ))
  
- (defun tryprove-simplest-conj (l r hyps state)
+ (defun tryprove-simplest-conj (l r hyps st state)
    (declare (xargs :mode :program :stobjs state))
-   (b* (((mv provedp state) (tryprove (thm-of-lrconj (pack-lrconj l r hyps)) state)))
+   (b* (((mv provedp state) (tryprove (thm-of-lrconj (pack-lrconj l r hyps)) st state)))
        (if (not provedp)
            (mv nil nil state)
            ; We were able to prove the conjecture. Can we prove it with less hypotheses?
-           (b* (((mv provedwithless-p less-hyps state) (tryprove-pruning-hyps l r nil hyps state)))
+           (b* (((mv provedwithless-p less-hyps state) (tryprove-pruning-hyps l r nil hyps st state)))
                (if provedwithless-p
                    (mv t less-hyps state) ; yes!
                    (mv t hyps state)) ; no, just use what we started with
@@ -671,11 +678,11 @@
            )))
  )
 
-(define tryprove-simplest-conj-top ((lrconj lrconjp) state)
+(define tryprove-simplest-conj-top ((lrconj lrconjp) st state)
   :mode :program
   :stobjs state
   (b* (((mv l r hyps) (unpack-lrconj lrconj))
-       ((mv provedp besthyps state) (tryprove-simplest-conj l r hyps state))
+       ((mv provedp besthyps state) (tryprove-simplest-conj l r hyps st state))
        (conj (pack-lrconj l r besthyps)))
       (mv provedp conj state)))
 
@@ -709,13 +716,13 @@
 (defmacro make-termM (fns left right)
   `(make-rw-conjectures (st-new (fn-dataM ,fns) ,left) ,left ,right))
 
-(defun validate-conjs (terms state cnt total)
+(defun validate-conjs (terms st state cnt total)
   (declare (xargs :mode :program
                   :stobjs (state)))
   (if (endp terms) (mv nil state)
       (b* ((conj (car terms))
-           ((mv proved-list state) (validate-conjs (cdr terms) state (1+ cnt) total))
-           ((mv provedp proved-conj state) (tryprove-simplest-conj-top conj state))
+           ((mv proved-list state) (validate-conjs (cdr terms) st state (1+ cnt) total))
+           ((mv provedp proved-conj state) (tryprove-simplest-conj-top conj st state))
            (proved-list1 (if provedp (cons proved-conj proved-list) proved-list)))
           (prog2$ (if (= 0 (mod (- total cnt) 10))
                       (cw "~s2~x0/~x1..." (- total cnt) total (coerce '(#\return) 'string)) nil)
@@ -728,7 +735,7 @@
         ((mv useful-conjs state) (prune-thms conjs st state))
         (num-useful (length useful-conjs))
         ((mv proved-thms state) (prog2$ (cw "~%Validating ~x0 conjectures...~%" num-useful)
-                                        (validate-conjs useful-conjs state 0 num-useful)))
+                                        (validate-conjs useful-conjs st state 0 num-useful)))
         (num-proved (len proved-thms))
         (nice-thms (posterior-prune-thms proved-thms state))
         (num-nice (len nice-thms))
@@ -750,13 +757,15 @@ Of these, we deemed ~x3 useful~s4~%"
   `(acl2::translate ,term t nil t "thm..." (w state) state))
 
 (defmacro prove** (term)
-  `(acl2::prove ,term (acl2::make-pspv (acl2::ens state) (w state) state) (acl2::default-hints (w state)) (acl2::ens state) (w state) "thm..." state))
+  `(b* (((mv ? hints state) (acl2::translate-hints "" (acl2::default-hints (w state)) nil (w state) state)))
+        (acl2::prove ,term (acl2::make-pspv (acl2::ens state) (w state) state) hints (acl2::ens state) (w state) "thm..." state)
+       ))
 
 (defmacro tyinfer** (var term)
   `(type-set-implied-by-term ,var nil ,term (ens state) (w state) nil))
 
 (make-termM '(equal rev2 len) 3 3)
-(genM '(rev2 len) 3
+(genM '(reverse len) 3
       acons 'show-useful-conjectures t nil)
 
 ;; (defthm my-len-of-rev (IMPLIES (AND (IF (TRUE-LISTP A)
