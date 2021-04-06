@@ -1,5 +1,5 @@
 ; vim: foldmethod=marker
-; (include-book "books/acl2s/cgen/top")
+(include-book "books/acl2s/cgen/top")
 (include-book "books/kestrel/std/system/add-suffix-to-fn-or-const")
 (include-book "books/std/util/defprojection")
 (include-book "books/std/util/defmapappend")
@@ -716,6 +716,17 @@
 (defmacro make-termM (fns left right)
   `(make-rw-conjectures (st-new (fn-dataM ,fns) ,left) ,left ,right))
 
+(defconst *cgen-opts* (acons 'verbosity-level 0 nil))
+
+(define ce-thms (terms state)
+  :stobjs state
+  :mode :program
+  (if (endp terms) (mv nil state)
+      (b* (((mv rst state) (ce-thms (cdr terms) state))
+           ((mv cts-found? ? state) (acl2s::test?-fn (thm-of-lrconj (car terms)) nil *cgen-opts* state)))
+          (mv (if cts-found? rst (cons (car terms) rst)) state)
+          )))
+
 (defun validate-conjs (terms st state cnt total)
   (declare (xargs :mode :program
                   :stobjs (state)))
@@ -734,8 +745,10 @@
         (conjs (make-rw-conjectures st ,left-size ,left-size))
         ((mv useful-conjs state) (prune-thms conjs st state))
         (num-useful (length useful-conjs))
-        ((mv proved-thms state) (prog2$ (cw "~%Validating ~x0 conjectures...~%" num-useful)
-                                        (validate-conjs useful-conjs st state 0 num-useful)))
+        ((mv plausible-conjs state) (ce-thms useful-conjs state))
+        (num-plausible (length plausible-conjs))
+        ((mv proved-thms state) (prog2$ (cw "~%Validating ~x0 conjectures...~%" num-plausible)
+                                        (validate-conjs plausible-conjs st state 0 num-plausible)))
         (num-proved (len proved-thms))
         (nice-thms (posterior-prune-thms proved-thms state))
         (num-nice (len nice-thms))
@@ -744,9 +757,10 @@
      (prog2$ (cw "~%====================~%\
 Given the theory ~x0,\
 we generated ~x1 conjectures of size left=~x2, right<=~x2.\
-Of these, we deemed ~x3 useful~s4~%"
-                 ,fns (length conjs) ,left-size num-useful
-                 (if show-useful-conjs (fms-to-string ", namely:~%~y0" (list (cons #\0 (thm-of-lrconj-list useful-conjs)))) "."))
+Of those, we deemed ~x3 useful.\
+Of those, we were unable to find counterexamples for ~x4~s5~%"
+                 ,fns (length conjs) ,left-size num-useful num-plausible
+                 (if show-useful-conjs (fms-to-string ", namely:~%~y0" (list (cons #\0 (thm-of-lrconj-list plausible-conjs)))) "."))
              (if (zerop num-proved)
                  (cw "~%Unfortunately, we failed to prove any of them true.~%")
                  (cw "We were able to prove ~x0. ~x1 of those appear nice, namely:~%~y2~%"
