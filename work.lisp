@@ -716,7 +716,7 @@
 (defmacro make-termM (fns left right)
   `(make-rw-conjectures (st-new (fn-dataM ,fns) ,left) ,left ,right))
 
-(defconst *cgen-opts* (acons 'verbosity-level 0 nil))
+(defconst *cgen-opts* '(:verbosity-level 0))
 
 (define ce-thms (terms state)
   :stobjs state
